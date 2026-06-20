@@ -24,10 +24,20 @@ export POLARS_TEMP_DIR="${SCRATCH}"
 export GPU_PART_MB="${GPU_PART_MB:-128}"
 export RAPIDSMPF_SPILL_DEVICE_LIMIT="${RAPIDSMPF_SPILL_DEVICE_LIMIT:-$((22*1024*1024*1024))}"
 
-if [ "${STAGE_RAMDISK:-0}" = "1" ]; then
-  RAM="/dev/shm/tpch_sf${SCALE}/parquet"; mkdir -p "${RAM}"
-  echo "staging parquet -> ${RAM}"; ls "${SRC}" | xargs -P 8 -I{} cp -r "${SRC}/{}" "${RAM}/" 2>/dev/null
-  SRC="${RAM}"
+# Stage parquet into /dev/shm (ramdisk) for fast reads -- ON by default. Needs the
+# container started with --shm-size >= dataset; reuses an existing stage and falls
+# back to reading from disk if it will not fit (set STAGE_RAMDISK=0 to disable).
+if [ "${STAGE_RAMDISK:-1}" = "1" ]; then
+  RAM="/dev/shm/tpch_sf${SCALE}/parquet"
+  need_kb=$(du -sk "${SRC}" | cut -f1); free_kb=$(df -k --output=avail /dev/shm | tail -1)
+  if [ -d "${RAM}" ] && [ "$(du -sk "${RAM}" 2>/dev/null | cut -f1)" = "${need_kb}" ]; then
+    echo "ramdisk: reusing ${RAM}"; SRC="${RAM}"
+  elif [ "${need_kb}" -lt "${free_kb}" ]; then
+    echo "ramdisk: staging $((need_kb/1024/1024))GB -> ${RAM}"
+    mkdir -p "${RAM}"; ls "${SRC}" | xargs -P 8 -I{} cp -r "${SRC}/{}" "${RAM}/"; SRC="${RAM}"
+  else
+    echo "ramdisk: dataset $((need_kb/1024/1024))GB > /dev/shm free $((free_kb/1024/1024))GB -> using disk (raise --shm-size to enable)"
+  fi
 fi
 
 free_gb(){ df -k --output=avail "${SCRATCH}" | tail -1 | awk '{print int($1/1024/1024)}'; }

@@ -48,6 +48,11 @@ docker run --rm -it --gpus all --shm-size=64g \
 
 Or compose: `docker compose run --rm tpch smoke` · `SCALE=100 docker compose run --rm tpch all`.
 
+**Ramdisk is the default:** the query runs stage the parquet into `/dev/shm` first,
+so set `--shm-size` ≥ the dataset (~`SCALE`×0.36 GB; SF100 ≈ 36 GB, SF500 ≈ 180 GB,
+e.g. `--shm-size=192g`). If it won't fit, the run prints a notice and reads from
+disk instead. Disable with `-e STAGE_RAMDISK=0`.
+
 The `smoke` target generates SF1, runs `SMOKE_QUERIES` (default `1 3 6`) on both
 GPU engines, builds the table, and **exits non-zero unless every query is OK on
 both** — a fast gate that the image, GPU, and both engines actually work before
@@ -91,7 +96,7 @@ Spark-RAPIDS-GPU seconds (startup excluded), row counts, and a match flag.
 | var | default | meaning |
 |-----|---------|---------|
 | `SCALE` | 10 | TPC-H scale factor (GB) |
-| `STAGE_RAMDISK` | 0 | stage parquet into `/dev/shm` before running (raise `--shm-size`) |
+| `STAGE_RAMDISK` | **1** | stage parquet into `/dev/shm` (ramdisk) before running — **on by default**; needs `--shm-size` ≥ dataset (~`SCALE`×0.36 GB), else auto-falls back to disk. Set `0` to force disk. |
 | `DRIVER_MEM` | 96g | Spark driver heap |
 | `HOST_SPILL` | 200G | Spark-RAPIDS host spill store |
 | `GPU_PART_MB` | 128 | Polars GPU IO partition size |

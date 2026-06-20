@@ -30,12 +30,20 @@ RAPIDS_JAR="${RAPIDS_JAR:-/opt/rapids/rapids-4-spark.jar}"
 
 source /opt/venv-spark/bin/activate
 
-# Optional: stage parquet into /dev/shm (needs --shm-size >= dataset on the host).
-if [ "${STAGE_RAMDISK:-0}" = "1" ]; then
-  RAM="/dev/shm/tpch_sf${SCALE}/parquet"; mkdir -p "${RAM}"
-  echo "staging parquet -> ${RAM}"
-  ls "${SRC}" | xargs -P 8 -I{} cp -r "${SRC}/{}" "${RAM}/" 2>/dev/null
-  SRC="${RAM}"
+# Stage parquet into /dev/shm (ramdisk) for fast reads -- ON by default. Needs the
+# container started with --shm-size >= dataset; reuses an existing stage and falls
+# back to reading from disk if it will not fit (set STAGE_RAMDISK=0 to disable).
+if [ "${STAGE_RAMDISK:-1}" = "1" ]; then
+  RAM="/dev/shm/tpch_sf${SCALE}/parquet"
+  need_kb=$(du -sk "${SRC}" | cut -f1); free_kb=$(df -k --output=avail /dev/shm | tail -1)
+  if [ -d "${RAM}" ] && [ "$(du -sk "${RAM}" 2>/dev/null | cut -f1)" = "${need_kb}" ]; then
+    echo "ramdisk: reusing ${RAM}"; SRC="${RAM}"
+  elif [ "${need_kb}" -lt "${free_kb}" ]; then
+    echo "ramdisk: staging $((need_kb/1024/1024))GB -> ${RAM}"
+    mkdir -p "${RAM}"; ls "${SRC}" | xargs -P 8 -I{} cp -r "${SRC}/{}" "${RAM}/"; SRC="${RAM}"
+  else
+    echo "ramdisk: dataset $((need_kb/1024/1024))GB > /dev/shm free $((free_kb/1024/1024))GB -> using disk (raise --shm-size to enable)"
+  fi
 fi
 
 # Shim shuffle-manager class name to the running Spark version (3.5.8 -> spark358).

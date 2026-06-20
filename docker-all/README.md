@@ -75,7 +75,7 @@ Every flag used above, explained:
 | `--rm` | auto-delete the container when it exits. Results are safe — they live on the mounted volume, not in the container. |
 | `-it` | `-i` (keep stdin open) + `-t` (allocate a TTY) so progress/logs stream live to your terminal. Omit both for unattended/CI runs. |
 | `--gpus all` | **required.** Exposes the host GPUs and injects the NVIDIA driver into the container. Use `--gpus '"device=0"'` to pin a single GPU. |
-| `--shm-size=64g` | size of `/dev/shm`. Spark/RAPIDS shuffle (and `STAGE_RAMDISK`) need it; Docker's 64 MB default is far too small. Raise toward the dataset size if staging parquet into `/dev/shm`. |
+| `--shm-size=64g` | size of `/dev/shm`. **TPC-H runs stage parquet to ramdisk by default**, so set this **≥ the dataset** (~`SCALE`×0.36 GB; SF100 ≈ 36 GB, SF500 ≈ 180 GB) — otherwise the run prints a notice and reads from disk instead. Also backs Spark/RAPIDS shuffle; Docker's 64 MB default is far too small regardless. |
 | `-v "$PWD/data:/data"` | bind-mount host `./data` → container `/data`, so generated data **and** results persist on the host after `--rm`. |
 | `-e SCALE=100` | env var: TPC-H scale factor in GB, used by the `tpch-*` commands. |
 | `-e SF=10` | env var: SSB scale factor for the `ssb-*` commands — must be `1`, `10`, `20`, or `40`. |
@@ -120,7 +120,7 @@ SF=10     docker compose run --rm bench ssb-all
 | `SF` | 1 | SSB scale — must be 1, 10, 20, or 40 |
 | `NUM_GPU` | 2 | Lancelot GPU count |
 | `SM_ARCH` | 120 | Lancelot CUDA arch (70/80/89/90/120) |
-| `STAGE_RAMDISK` | 0 | stage TPC-H parquet into /dev/shm first (raise `--shm-size`) |
+| `STAGE_RAMDISK` | **1** | stage TPC-H parquet into /dev/shm (ramdisk) before running — **on by default**; needs `--shm-size` ≥ dataset (~`SCALE`×0.36 GB), else auto-falls back to disk. Set `0` to force disk. |
 | `DRIVER_MEM` / `HOST_SPILL` | 96g / 200G | Spark-RAPIDS heap / host spill |
 
 ## Outputs (under `/data`)

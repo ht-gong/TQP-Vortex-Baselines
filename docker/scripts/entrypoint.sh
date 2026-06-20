@@ -9,9 +9,10 @@
 #   smoke         tiny SF1 end-to-end self-test (gen + both engines + assert)
 #   bash          drop into a shell
 #
-# Config via env: SCALE (default 10), DATA_DIR (default /data), STAGE_RAMDISK=1
-# to stage parquet into /dev/shm first, plus the per-engine knobs documented in
-# each script.
+# Config via env: SCALE (default 10), DATA_DIR (default /data). STAGE_RAMDISK
+# defaults to 1 (parquet staged into /dev/shm before running; needs --shm-size >=
+# dataset, else auto-falls back to disk -- set 0 to force disk). Plus the
+# per-engine knobs documented in each script.
 set -euo pipefail
 cmd="${1:-help}"; shift || true
 S="/opt/baseline/scripts"
