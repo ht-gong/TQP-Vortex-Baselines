@@ -27,3 +27,6 @@ rapids/env/
 # ---- run logs / captures ----
 *.log
 *.out
+
+# merged image data
+docker-all/data/

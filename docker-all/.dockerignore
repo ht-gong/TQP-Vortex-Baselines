@@ -1,0 +1,6 @@
+# Context is just app/ + scripts/; everything else is cloned/downloaded in the
+# Dockerfile. Keep data and editor cruft out.
+data/
+**/__pycache__/
+*.pyc
+*.log

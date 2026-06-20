@@ -1,0 +1,24 @@
+# Multi-tool image. Requires Docker + NVIDIA Container Toolkit on the host.
+#   SCALE=100 docker compose run --rm bench tpch-all
+#   SF=1      docker compose run --rm bench ssb-all
+services:
+  bench:
+    build: .
+    image: tpch-multitool
+    shm_size: "64gb"           # raise toward dataset size if STAGE_RAMDISK=1
+    environment:
+      SCALE: "${SCALE:-10}"    # TPC-H scale
+      SF: "${SF:-1}"           # SSB (Lancelot) scale: 1|10|20|40
+      NUM_GPU: "${NUM_GPU:-2}"
+      SM_ARCH: "${SM_ARCH:-120}"
+      SM_DEF: "${SM_DEF:--DSM700}"
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    command: ["help"]
