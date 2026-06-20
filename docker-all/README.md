@@ -66,10 +66,28 @@ docker run --rm -it --gpus all --shm-size=64g \
   -e SCALE=100 -v "$PWD/data:/data" tpch-multitool tpch-polars
 ```
 
-Flags that matter: **`--gpus all`** (required — injects the GPUs/driver),
-**`--shm-size=64g`** (Spark/RAPIDS shuffle + optional `STAGE_RAMDISK`; raise
-toward dataset size if staging to `/dev/shm`), **`-v "$PWD/data:/data"`**
-(persists data + results on the host), **`-e SCALE=`/`-e SF=`** (scale factors).
+Every flag used above, explained:
+
+| flag | meaning |
+|------|---------|
+| `docker build -t tpch-multitool .` | `-t tpch-multitool` tags (names) the image; `.` is the build context (this `docker-all/` dir). |
+| `docker run` | create + start a container from the image. |
+| `--rm` | auto-delete the container when it exits. Results are safe — they live on the mounted volume, not in the container. |
+| `-it` | `-i` (keep stdin open) + `-t` (allocate a TTY) so progress/logs stream live to your terminal. Omit both for unattended/CI runs. |
+| `--gpus all` | **required.** Exposes the host GPUs and injects the NVIDIA driver into the container. Use `--gpus '"device=0"'` to pin a single GPU. |
+| `--shm-size=64g` | size of `/dev/shm`. Spark/RAPIDS shuffle (and `STAGE_RAMDISK`) need it; Docker's 64 MB default is far too small. Raise toward the dataset size if staging parquet into `/dev/shm`. |
+| `-v "$PWD/data:/data"` | bind-mount host `./data` → container `/data`, so generated data **and** results persist on the host after `--rm`. |
+| `-e SCALE=100` | env var: TPC-H scale factor in GB, used by the `tpch-*` commands. |
+| `-e SF=10` | env var: SSB scale factor for the `ssb-*` commands — must be `1`, `10`, `20`, or `40`. |
+| `-e NUM_GPU=2` | env var: number of GPUs Lancelot partitions across (`ssb-build`). |
+| `-e SM_ARCH=120` | env var: CUDA arch Lancelot compiles for — `120` Blackwell/RTX 5090, `90` Hopper, `89` Ada, `80` Ampere, `70` Volta. |
+| `tpch-multitool` | the image name to run (must come after all `docker run` options). |
+| trailing `tpch-all` / `ssb-all` / … | the entrypoint command to execute (see the table below). |
+
+Compose: `docker compose run --rm bench tpch-all` — `run` starts a one-off
+container of the `bench` service, `--rm` removes it on exit, and `tpch-all`
+overrides the service's default command. `--gpus`, `--shm-size`, the volume, and
+env vars all come from `docker-compose.yml`.
 
 ### Compose
 
