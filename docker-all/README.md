@@ -40,6 +40,45 @@ SCALE=100 ./host.sh tpch-all
 SF=10 ./host.sh ssb-all
 ```
 
+### Plain `docker` (what `host.sh` wraps)
+
+`host.sh` is just convenience; the explicit commands are:
+
+```bash
+# build (run from this docker-all/ directory)
+docker build -t tpch-multitool .
+
+# self-test
+docker run --rm -it --gpus all --shm-size=64g \
+  -v "$PWD/data:/data" tpch-multitool tpch-smoke
+
+# TPC-H at SF100 (Spark-RAPIDS + Polars GPU + comparison table)
+docker run --rm -it --gpus all --shm-size=64g \
+  -e SCALE=100 -v "$PWD/data:/data" tpch-multitool tpch-all
+
+# SSB / Lancelot at SF10 on 2 GPUs, Blackwell arch
+docker run --rm -it --gpus all --shm-size=64g \
+  -e SF=10 -e NUM_GPU=2 -e SM_ARCH=120 \
+  -v "$PWD/data:/data" tpch-multitool ssb-all
+
+# any single command, e.g. just the Polars GPU run:
+docker run --rm -it --gpus all --shm-size=64g \
+  -e SCALE=100 -v "$PWD/data:/data" tpch-multitool tpch-polars
+```
+
+Flags that matter: **`--gpus all`** (required — injects the GPUs/driver),
+**`--shm-size=64g`** (Spark/RAPIDS shuffle + optional `STAGE_RAMDISK`; raise
+toward dataset size if staging to `/dev/shm`), **`-v "$PWD/data:/data"`**
+(persists data + results on the host), **`-e SCALE=`/`-e SF=`** (scale factors).
+
+### Compose
+
+```bash
+cd docker-all
+SCALE=100 docker compose run --rm bench tpch-all
+SF=10     docker compose run --rm bench ssb-all
+```
+
 ## Commands (entrypoint)
 
 | Command | What |
