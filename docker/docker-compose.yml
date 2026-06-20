@@ -1,0 +1,23 @@
+# Compose wrapper. Requires Docker + NVIDIA Container Toolkit on the host.
+#   SCALE=100 docker compose run --rm tpch all
+services:
+  tpch:
+    build: .
+    image: tpch-gpu
+    shm_size: "64gb"          # raise toward dataset size if STAGE_RAMDISK=1
+    environment:
+      SCALE: "${SCALE:-10}"
+      STAGE_RAMDISK: "${STAGE_RAMDISK:-0}"
+      DRIVER_MEM: "${DRIVER_MEM:-96g}"
+      HOST_SPILL: "${HOST_SPILL:-200G}"
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    # default command; override: `docker compose run --rm tpch <cmd>`
+    command: ["all"]

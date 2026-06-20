@@ -1,0 +1,29 @@
+# ---- large generated data (regenerate via the gen pipelines) ----
+tpch_sf500/parquet/
+**/_raw/
+**/_tmp/
+**/_tmp_pq/
+**/_work/
+_spark_scratch/
+_polars_scratch/
+_polars_scratch_gpu/
+docker/data/
+
+# ---- python venvs & caches ----
+polars/.venv/
+polars/.venv-gpu/
+**/__pycache__/
+*.pyc
+
+# ---- large binaries / envs (re-downloadable, see READMEs) ----
+rapids/jars/
+rapids/env/
+
+# ---- upstream clones (re-cloneable; URLs documented in READMEs) ----
+/lancelot/
+/spark-rapids-benchmarks/
+/tpch-kit/
+
+# ---- run logs / captures ----
+*.log
+*.out

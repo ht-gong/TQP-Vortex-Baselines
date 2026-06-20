@@ -1,0 +1,38 @@
+\begin{table}[t]
+  \centering
+  \caption{TPC-H SF500 GPU query runtimes on a single NVIDIA RTX 5090 (32\,GB).
+    Per-query wall-clock seconds, engine/JVM/GPU startup excluded; the faster
+    engine per query is in bold. Polars~GPU = cudf-polars~26.6; Spark-RAPIDS =
+    Spark~3.5.8 + RAPIDS~26.04.2. Result row counts match between engines.}
+  \label{tab:tpch-sf500-gpu}
+  \begin{tabular}{l r r}
+    \toprule
+    Query & Polars GPU (s) & Spark-RAPIDS GPU (s) \\
+    \midrule
+    q1 & 15.57 & \textbf{12.84} \\
+    q2 & \textbf{2.52} & 36.67 \\
+    q3 & 106.62 & \textbf{43.94} \\
+    q4 & \textbf{5.82} & 22.87 \\
+    q5 & 164.05 & \textbf{100.27} \\
+    q6 & 9.52 & \textbf{6.65} \\
+    q7 & 370.15 & \textbf{50.73} \\
+    q8 & 146.80 & \textbf{121.14} \\
+    q9 & 564.03 & \textbf{157.83} \\
+    q10 & \textbf{36.26} & 41.08 \\
+    q11 & \textbf{2.61} & 30.06 \\
+    q12 & 111.43 & \textbf{21.48} \\
+    q13 & \textbf{7.72} & 19.08 \\
+    q14 & \textbf{18.38} & 19.61 \\
+    q15 & \textbf{7.42} & 32.41 \\
+    q16 & \textbf{5.73} & 23.01 \\
+    q17 & \textbf{14.72} & 61.23 \\
+    q18 & 168.29 & \textbf{124.53} \\
+    q19 & 140.95 & \textbf{21.52} \\
+    q20 & \textbf{14.38} & 41.13 \\
+    q21 & 729.87 & \textbf{97.83} \\
+    q22 & \textbf{2.27} & 15.81 \\
+    \midrule
+    \textbf{Total} & 2645.1 & \textbf{1101.7} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
