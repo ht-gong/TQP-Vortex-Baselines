@@ -1,3 +1,10 @@
+# merged image data
+docker-all/data/
+
+# pulled repo
+dpfproto/DPFProto
+dpfproto/data
+
 # ---- large generated data (regenerate via the gen pipelines) ----
 tpch_sf500/parquet/
 **/_raw/
@@ -27,6 +34,3 @@ rapids/env/
 # ---- run logs / captures ----
 *.log
 *.out
-
-# merged image data
-docker-all/data/
