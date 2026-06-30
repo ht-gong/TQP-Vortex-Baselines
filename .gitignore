@@ -4,6 +4,7 @@ docker-all/data/
 # pulled repo
 dpfproto/DPFProto
 dpfproto/data
+dpfproto/logs/
 
 # ---- large generated data (regenerate via the gen pipelines) ----
 tpch_sf500/parquet/

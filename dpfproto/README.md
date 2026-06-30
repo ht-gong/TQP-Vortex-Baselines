@@ -166,6 +166,8 @@ sudo scripts/tpch_run_all.sh \
 
 ### GOLAP (baseline in DPFProto codebase)
 
+Running GOLAP end-to-end
+
 ```bash
 # From DPFProto root
 SF=1
