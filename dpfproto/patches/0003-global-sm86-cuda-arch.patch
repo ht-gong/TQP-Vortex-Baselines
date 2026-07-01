@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5a84a16..35d6a71 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,7 +36,7 @@ add_compile_definitions(__is_convertible=__bam_is_convertible)
+ 
+ project("gdsdb" CUDA CXX)
+ 
+-set(CMAKE_CUDA_ARCHITECTURES native)
++set(CMAKE_CUDA_ARCHITECTURES 86)
+ set(CMAKE_CUDA_STANDARD 20)
+ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+ set(CMAKE_CXX_STANDARD 23)

@@ -1,0 +1,30 @@
+diff --git a/src/common/common.cu b/src/common/common.cu
+index e58b858..a695244 100644
+--- a/src/common/common.cu
++++ b/src/common/common.cu
+@@ -530,6 +530,10 @@ void open_files(BenchmarkOptions &options, std::vector<int> &fds)
+     for (i = 0; i < options.ndev; i++)
+     {
+         int fd = open(options.devname[i], oflag, 0644);
++        if (fd < 0 && errno == EINVAL && (oflag & O_DIRECT))
++        {
++            fd = open(options.devname[i], oflag & ~O_DIRECT, 0644);
++        }
+         if (fd < 0)
+         {
+             std::cerr << "failed to open file " << options.file << std::endl;
+diff --git a/src/common/tpch_loader.cu b/src/common/tpch_loader.cu
+index 8f74d44..8a00cf2 100644
+--- a/src/common/tpch_loader.cu
++++ b/src/common/tpch_loader.cu
+@@ -9822,6 +9822,10 @@ void open_output_files(LoaderOptions &options, std::vector<int> &fds)
+     for (i = 0; i < options.ndev; i++)
+     {
+         int fd = open(options.devname[i], oflag, 0644);
++        if (fd < 0 && errno == EINVAL && (oflag & O_DIRECT))
++        {
++            fd = open(options.devname[i], oflag & ~O_DIRECT, 0644);
++        }
+         if (fd < 0)
+         {
+             std::cerr << "failed to open file " << options.output_files << std::endl;

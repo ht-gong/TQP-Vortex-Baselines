@@ -21,6 +21,14 @@ Reported results:
 - reports better TPC-H performance than GOLAP
 - Main gains come from reducing GPU memory traffic and intermediate materialization
 
+```bash
+cd ~/work/TQP-Vortex-Baselines/dpfproto
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install matplotlib pandas
+```
+
 ## Code running notes
 
 ### DPFProto
@@ -221,4 +229,15 @@ sudo scripts/tpch_run_all.sh \
   --skip datapathfusion \
   --no-load \
   --no-revenue
+```
+
+### GOLAP ramdisk variant
+
+The ramdisk runner uses `/dev/shm` files as DPFProto device images. Because
+tmpfs rejects `O_DIRECT`, the script applies the local fallback patch and
+rebuilds the touched binaries before running:
+
+```bash
+cd ~/work/TQP-Vortex-Baselines
+dpfproto/scripts/run_golap_ramdisk.sh
 ```

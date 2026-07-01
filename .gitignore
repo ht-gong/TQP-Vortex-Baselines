@@ -6,6 +6,8 @@ dpfproto/DPFProto
 dpfproto/data
 dpfproto/logs/
 
+.venv/
+
 # ---- large generated data (regenerate via the gen pipelines) ----
 tpch_sf500/parquet/
 **/_raw/

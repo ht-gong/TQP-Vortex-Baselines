@@ -2,7 +2,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$(find "${SCRIPT_DIR}/../DPFProto/logs/tpch_run_all" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)"
+ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="$ROOT/logs/golap_filedev/20260630_175044"
+
+if [[ ! -d "$LOG_DIR" ]]; then
+  LOG_DIR="$(find "$ROOT/logs/golap_filedev" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)"
+fi
 
 python3 "${SCRIPT_DIR}/plot_tpch.py" "${LOG_DIR}" --out "${LOG_DIR}/tpch_runtime.png"
 echo "Wrote ${LOG_DIR}/tpch_runtime.png"
