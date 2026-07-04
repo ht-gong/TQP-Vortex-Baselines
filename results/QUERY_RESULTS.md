@@ -22,7 +22,7 @@ the ramdisk (`/dev/shm`), executed on Spark 3.5.8 with the RAPIDS Accelerator on
   `pinnedPool=8g`, driver heap 96 g.
 
 Driver: `/workspace/baseline/rapids/run_tpch_safe.sh` + `run_tpch_queries.py`.
-Queries: `/workspace/baseline/tpch_sf500/queries/stream_qualification.sql` (qualification params).
+Queries: `/workspace/baseline/results/queries/stream_qualification.sql` (qualification params).
 
 ## Results (GPU execution time, startup excluded)
 
@@ -59,4 +59,4 @@ q18 (125 s), q8 (121 s), q5 (100 s), q21 (98 s). Result CSV: `query_times_gpu.cs
   Using both needs a standalone cluster with two GPU executors.
 - Times include host-memory/disk spill overhead inherent to SF500 on one GPU; they are
   a working baseline, **not** an official TPC-H result (NDS-H is non-compliant by license).
-- Per-query Spark logs: `/workspace/baseline/tpch_sf500/q<N>.log`.
+- Per-query Spark logs: `/workspace/baseline/results/q<N>.log`.

@@ -110,7 +110,7 @@ RAPIDS_VERSION=… CUDF_POLARS_VERSION=…`.
 
 - A **single 32 GB GPU is the bottleneck at large SF**: queries that fit the GPU
   are very fast, but big joins that spill device→host over PCIe are slow on both
-  engines (and on this box CPU Polars beats both — see `../tpch_sf500/POLARS_RESULTS.md`).
+  engines (and on this box CPU Polars beats both — see `../results/POLARS_RESULTS.md`).
 - Choose `SCALE` to fit your disk: raw text is generated in deletable batches,
   but the final parquet is roughly `SCALE × 0.36 GB` (e.g. SF500 ≈ 180 GB).
 - To use **both** GPUs you'd run Spark standalone with 2 GPU executors, or

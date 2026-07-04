@@ -28,7 +28,7 @@ is ~`6,001,215 × 500` by design (random 1–7 lineitems/order → measured avg 
 
 ```python
 # source /workspace/baseline/rapids/activate.sh   (Spark 3.5.8 + RAPIDS)
-df = spark.read.parquet("/workspace/baseline/tpch_sf500/parquet/lineitem")
+df = spark.read.parquet("/workspace/baseline/results/parquet/lineitem")
 ```
 
 To read with GPU acceleration, launch Spark with the RAPIDS plugin (see
@@ -50,7 +50,7 @@ then **deletes the raw batch** before the next. Peak disk stayed ~190 GB.
 Regenerate (≈2 h on this 256-core / 2×RTX 5090 box):
 
 ```bash
-/workspace/baseline/rapids/nds_h_pipeline.sh 500 1000 100 /workspace/baseline/tpch_sf500
+/workspace/baseline/rapids/nds_h_pipeline.sh 500 1000 100 /workspace/baseline/results
 ```
 
 `pipeline_milestones.log` holds the per-batch timing/disk record from this run.

@@ -9,7 +9,13 @@ dpfproto/logs/
 .venv/
 
 # ---- large generated data (regenerate via the gen pipelines) ----
-tpch_sf500/parquet/
+results/parquet/
+
+# ---- benchmark intermediates: results/all_results.csv is the ONLY kept results
+# file; every per-run / per-SF / detail CSV is a throwaway (runners merge into
+# all_results.csv via merge_results.py and delete their temp).
+results/query_times_*.csv
+results/*_logs/
 **/_raw/
 **/_tmp/
 **/_tmp_pq/
@@ -33,6 +39,11 @@ rapids/env/
 /lancelot/
 /spark-rapids-benchmarks/
 /tpch-kit/
+# the sirius clone + its .pixi build env (setup_sirius.sh recreates it)
+/sirius/sirius/
+
+# ---- sirius spill scratch ----
+_sirius_spill/
 
 # ---- run logs / captures ----
 *.log
