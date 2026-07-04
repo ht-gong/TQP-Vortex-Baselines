@@ -11,10 +11,10 @@ set -uo pipefail
 SUBSET="${1:-}"
 RAPIDS_DIR="/workspace/baseline/rapids"
 RAM_PQ="/dev/shm/tpch_sf500/parquet"
-STREAM="/workspace/baseline/tpch_sf500/queries/stream_qualification.sql"
-OUT_CSV="/workspace/baseline/tpch_sf500/query_times_gpu.csv"
+STREAM="/workspace/baseline/results/queries/stream_qualification.sql"
+OUT_CSV="/workspace/baseline/results/query_times_gpu.csv"
 SCRATCH="/workspace/baseline/_spark_scratch"
-LOG="/workspace/baseline/tpch_sf500/warm_run.log"
+LOG="/workspace/baseline/results/warm_run.log"
 
 # --- tunables (iterate here) ---
 DRIVER_MEM="${DRIVER_MEM:-96g}"            # JVM heap (on-heap)

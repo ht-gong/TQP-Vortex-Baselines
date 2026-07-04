@@ -1,0 +1,53 @@
+# Sirius (gpu_execution) config for the TPC-H SF500 baseline.
+# Single 32 GB RTX 5090, out-of-core: GPU -> pinned host RAM -> disk spill.
+# Mirrors the single-GPU + host-spill regime the rapids/polars-GPU baselines use.
+# Schema: docs/super-sirius/configuration.md in the sirius clone.
+sirius:
+  # One GPU, to match the single-GPU baseline (rapids local[*], polars device 0).
+  topology: { num_gpus: 1 }
+
+  memory:
+    gpu:
+      usage_limit_fraction: 0.95        # ~30 GB of the 32 GB card; 5% left for CUDA/cuDF
+      reservation_limit_fraction: 0.9
+      downgrade_trigger_fraction: 0.8   # start evicting GPU->host at 80% reserved
+      downgrade_stop_fraction: 0.6
+    host:
+      # Pinned host tier. Grows on demand up to capacity (initial footprint =
+      # block_size*pool_size*initial_number_pools), so startup stays cheap while
+      # allowing a large spill tier on this 1 TB box. capacity is PER NUMA node.
+      capacity_bytes: 128Gi
+      initial_number_pools: 4           # ~2 GiB pinned at startup, grows as needed
+      pool_size: 512
+      block_size: 1Mi
+      downgrade_trigger_fraction: 0.8   # host->disk spill only under real pressure
+      downgrade_stop_fraction: 0.7
+    disk:
+      # Last-resort spill tier (host RAM tier above absorbs almost everything at
+      # SF500). Placed on /dev/shm (RAM-backed, O_DIRECT-capable) so it can never
+      # fill the 58 GB root disk; cuCascade hard-caps it at capacity_bytes, and
+      # 40 GB + the ~180 GB parquet still fits /dev/shm's 251 GB. The run script's
+      # / watchdog is a second safety net (covers any DuckDB CPU-fallback temp).
+      disk_id: 0
+      capacity_bytes: 40GB
+      downgrade_root_dirs: "/dev/shm/_sirius_spill"
+
+  executor:
+    # use_sirius_datasource:false -> kvikio backend (no io_uring). This container's
+    # seccomp blocks io_uring_setup ("uring_reactor: ring init: Operation not
+    # permitted"); kvikio (POSIX/compat mode) avoids it. Single-GPU only, which is
+    # what this baseline uses. uring_n_reactors:0 so no io_uring reactor is created.
+    scan_manager: { num_threads: 16, use_sirius_datasource: false, uring_n_reactors: 1, enable_prefetch_cache: false }
+    pipeline:     { num_threads: 8 }
+    downgrade:    { num_threads: 4 }
+    task_creator: { num_threads: 2 }
+
+  operator_params:
+    scan_task_batch_size:       805306368   # 768 MiB
+    max_sort_partition_bytes:   0           # auto = 33% GPU mem
+    hash_partition_bytes:       805306368
+    concat_batch_bytes:         805306368
+    max_build_hash_table_bytes: 805306368
+
+  telemetry:
+    enable_quent: false

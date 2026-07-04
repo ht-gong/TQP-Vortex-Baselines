@@ -133,7 +133,7 @@ data/logs/                                    # Lancelot run logs
 
 ## Caveats (validated)
 
-- **TPC-H Spark-RAPIDS + Polars: fully working** on sm_120 (see `../tpch_sf500/`
+- **TPC-H Spark-RAPIDS + Polars: fully working** on sm_120 (see `../results/`
   for SF500 results). Polars GPU auto-retries OOM queries on managed memory.
 - **Lancelot builds + links for sm_120** (with the auto-applied fixes: dbgen `-f`,
   `--std=c++17`, libpapi-dev, `-x cu` minmax fallback) and generates data, but the
@@ -141,4 +141,4 @@ data/logs/                                    # Lancelot run logs
   segfaults / the engine exits non-zero. Try `SM_ARCH=90` (PTX-JIT) or a
   Volta/Ampere GPU. See `../lancelot/docker/README.md`.
 - A single 32 GB GPU spills large TPC-H joins to host; CPU Polars is fastest at
-  SF500 on this box (`../tpch_sf500/POLARS_RESULTS.md`).
+  SF500 on this box (`../results/POLARS_RESULTS.md`).

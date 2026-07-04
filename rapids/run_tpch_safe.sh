@@ -10,11 +10,13 @@ set -uo pipefail
 
 QUERIES="${1:-$(seq 1 22)}"
 RAPIDS_DIR="/workspace/baseline/rapids"
-RAM_PQ="/dev/shm/tpch_sf500/parquet"
-STREAM="/workspace/baseline/tpch_sf500/queries/stream_qualification.sql"
-OUT_CSV="/workspace/baseline/tpch_sf500/query_times_gpu.csv"
-SCRATCH="/workspace/baseline/_spark_scratch"
-LOG="/workspace/baseline/tpch_sf500/safe_run.log"
+RAM_PQ="${TPCH_PARQUET:-/dev/shm/tpch_sf500/parquet}"
+STREAM="/workspace/baseline/results/queries/stream_qualification.sql"
+TPCH_SF="${TPCH_SF:-500}"
+# throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
+OUT_CSV="${OUT_CSV:-/tmp/tpch_rapids_sf${TPCH_SF}.csv}"
+SCRATCH="${SPARK_SCRATCH:-/workspace/baseline/_spark_scratch}"
+LOG="/workspace/baseline/results/safe_run.log"
 DRIVER_MEM="${DRIVER_MEM:-96g}"      # JVM heap (host spill store is off-heap, separate)
 MIN_FREE_GB="${MIN_FREE_GB:-30}"     # kill a query if free disk drops below this
 
@@ -30,7 +32,7 @@ log "free disk at start: $(free_gb)GB ; ramdisk: $(du -sh ${RAM_PQ%/parquet} 2>/
 
 for q in ${QUERIES}; do
   rm -rf "${SCRATCH:?}"/* 2>/dev/null
-  qlog="/workspace/baseline/tpch_sf500/q${q}.log"
+  qlog="/workspace/baseline/results/q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
   env -u CONTAINER_ID spark-submit \
     --master "local[*]" --driver-memory "${DRIVER_MEM}" \
@@ -74,3 +76,8 @@ done
 
 log "ALL DONE. free disk: $(free_gb)GB"
 log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
+
+if [ "${TPCH_MERGE:-1}" = 1 ]; then
+  python3 /workspace/baseline/merge_results.py rapids "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+    && rm -f "${OUT_CSV}"
+fi

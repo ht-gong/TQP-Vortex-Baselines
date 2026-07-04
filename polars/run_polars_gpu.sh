@@ -9,10 +9,12 @@ set -uo pipefail
 
 QUERIES="${1:-$(seq 1 22)}"
 DIR="/workspace/baseline/polars"
-RAM_PQ="/dev/shm/tpch_sf500/parquet"
-OUT_CSV="/workspace/baseline/tpch_sf500/query_times_polars_gpu.csv"
+RAM_PQ="${TPCH_PARQUET:-/dev/shm/tpch_sf500/parquet}"
+TPCH_SF="${TPCH_SF:-500}"
+# throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
+OUT_CSV="${OUT_CSV:-/tmp/tpch_polars_gpu_sf${TPCH_SF}.csv}"
 SCRATCH="/workspace/baseline/_polars_scratch_gpu"
-LOG="/workspace/baseline/tpch_sf500/polars_gpu_run.log"
+LOG="/workspace/baseline/results/polars_gpu_run.log"
 MIN_FREE_GB="${MIN_FREE_GB:-30}"
 
 source "${DIR}/.venv-gpu/bin/activate"
@@ -30,7 +32,7 @@ log "free disk at start: $(free_gb)GB"
 
 for q in ${QUERIES}; do
   rm -rf "${SCRATCH:?}"/* 2>/dev/null
-  qlog="/workspace/baseline/tpch_sf500/polars_gpu_q${q}.log"
+  qlog="/workspace/baseline/results/polars_gpu_q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
   python "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append gpu \
     >"${qlog}" 2>&1 &
@@ -56,3 +58,8 @@ done
 
 log "ALL DONE. free disk: $(free_gb)GB"
 log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
+
+if [ "${TPCH_MERGE:-1}" = 1 ]; then
+  python3 /workspace/baseline/merge_results.py polars_gpu "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+    && rm -f "${OUT_CSV}"
+fi
