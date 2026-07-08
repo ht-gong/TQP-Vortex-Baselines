@@ -10,11 +10,14 @@ ARCH_PATCHES=(
 cd "$DPF_ROOT"
 
 # Fixed experiment settings.
-SF=1
+# generate things here:
+# dpfproto/data/tpch/input100
+# dpfproto/data/tpch/sideways/sf100
+SF=100
 THREADS=1
 TRIALS=3
 QUERIES="q1 q3 q5 q6 q13 q16"
-DEVICE_SIZE=16G
+DEVICE_SIZE=64G
 DATA_BASE="$ROOT/data/tpch"
 DEV_BASE="$ROOT/data/golap_filedev/sf${SF}"
 LOG_DIR="$ROOT/logs/golap_filedev/$(date +%Y%m%d_%H%M%S)"

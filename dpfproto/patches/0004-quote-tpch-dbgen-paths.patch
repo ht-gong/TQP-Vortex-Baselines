@@ -1,0 +1,48 @@
+diff --git a/scripts/tpch/dbgen.sh b/scripts/tpch/dbgen.sh
+index e2229e7..3e58815 100755
+--- a/scripts/tpch/dbgen.sh
++++ b/scripts/tpch/dbgen.sh
+@@ -71,14 +71,14 @@ destdir=$(realpath "$4")
+ trap 'jobs -pr | xargs -r kill 2>/dev/null || true' EXIT
+ 
+ 
+-export DSS_CONFIG=${dbgendir}/
++export DSS_CONFIG="${dbgendir}/"
+ 
+-pushd $destdir
++pushd "$destdir"
+ 
+ # mkdir
+ for tbl in ${tables[@]}
+ do
+-  mkdir -p $tbl
++  mkdir -p "$tbl"
+ done
+ 
+ 
+@@ -88,13 +88,13 @@ do
+   optname=${opts[$tbidx]}
+ 
+   echo "Generating $tblname..."
+-  mkdir -p ${tblname}
+-  pushd ${tblname}
++  mkdir -p "${tblname}"
++  pushd "${tblname}"
+ 
+   PIDS=()
+   if [ $nthr -eq 1 ]; then
+     (
+-      $dbgendir/dbgen -T ${optname} -f -s ${sf}
++      "${dbgendir}/dbgen" -T ${optname} -f -s ${sf}
+       echo -e "\tProgress:1/1"
+     )&
+     PIDS+=($!)
+@@ -102,7 +102,7 @@ do
+     for i in $(seq 1 ${nthr})
+     do
+         (
+-        $dbgendir/dbgen -T ${optname} -f -s ${sf} -C ${nthr} -S ${i}
++        "${dbgendir}/dbgen" -T ${optname} -f -s ${sf} -C ${nthr} -S ${i}
+         echo -e "\tProgress:${i}/${nthr}"
+         )&
+         PIDS+=($!)

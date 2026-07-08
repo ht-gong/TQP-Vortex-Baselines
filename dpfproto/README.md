@@ -44,6 +44,11 @@ cd dpfproto
 git clone --recursive https://github.com/dbc-utokyoiis/DPFProto.git
 cd DPFProto
 
+# MAKE COPY FOR RAM DISK
+cd ~/work/TQP-Vortex-Baselines/dpfproto
+
+cp -a DPFProto DPFProto-ramdisk
+
 # setup checks
 nvcc --version
 cmake --version
@@ -176,9 +181,29 @@ sudo scripts/tpch_run_all.sh \
 
 Running GOLAP end-to-end
 
+re-exporting data for different SF
+```bash
+cd ~/work/TQP-Vortex-Baselines
+
+export DATA_BASE=$PWD/dpfproto/data/tpch
+export TPCH_DBGEN_DIR=$HOME/work/tpch_official_dbgen
+
+cd dpfproto/DPFProto
+
+# raw TPC-H SF100 tables
+scripts/tpch/run_dbgen.sh 100 "$(nproc)" "$DATA_BASE"
+
+# GOLAP sideway layout SF100
+DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning.local.sh -s 100 -n "$(nproc)"
+
+# sanity check
+find "$DATA_BASE/input100" -maxdepth 2 -type f | head
+find "$DATA_BASE/sideways/sf100" -maxdepth 2 -type f | head
+```
+
 ```bash
 # From DPFProto root
-SF=1
+SF=100
 THREADS=$(nproc)
 TRIALS=1
 QUERIES="q1 q3 q5 q6 q13 q16"
