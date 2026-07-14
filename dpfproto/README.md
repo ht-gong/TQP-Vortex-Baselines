@@ -276,7 +276,7 @@ q16. Logs land under `dpfproto/logs/golap_ramdisk/<timestamp>/`.
 ## Further Investigation
 
 
-### Are GOLAP OOMs caused when intermediates grow large?
+### Q1: Are GOLAP OOMs caused when intermediates grow large?
 
 - Intermediates: temporary data created during query execution before final answer
 
@@ -295,7 +295,18 @@ q16. Logs land under `dpfproto/logs/golap_ramdisk/<timestamp>/`.
     - RTX 3090 usable VRAM as a line 
 
 
-### Is GOLAP bottlenecked on GPU compute when run on RTX3090?
+#### Investigation Results
+
+GOLAP can avoid keeping all input data in GPU memory because it streams/pages data from storage.
+But Q5 fails on runtime GPU allocation of intermediates shown by the following line:
+
+`[cuda_alloc_failed] request_mb=2049 free_mb=165 error=out of memory`
+
+These intermediates are not spillable and results in OOM when the VRAM is full on our RTX 3090. 
+  
+
+
+### Q2: Is GOLAP bottlenecked on GPU compute when run on RTX3090?
 
 - Whether GOLAP is limited by the GPU's compute/decompression/query kernels instead of storage
 
@@ -317,7 +328,7 @@ GPU util high
 ramdisk io_throughput_gbs comfortably below possible ramdisk bandwidth
 runtime stable even though storage is much faster
 
-### How large does storage pruning affect the runtime for GOLAP?
+### Q3: How large does storage pruning affect the runtime for GOLAP?
 
 - Storage pruning: skipping chunks via metadata before reading them
 
