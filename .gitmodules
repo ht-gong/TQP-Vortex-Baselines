@@ -1,0 +1,4 @@
+[submodule "dpfproto/DPFProto"]
+	path = dpfproto/DPFProto
+	url = git@github.com:wangychn/DPFProto.git
+	branch = golap-magnum-baseline
