@@ -30,10 +30,10 @@ Minimal repeated-run DuckDB baseline over the shared TPC-H parquet dataset.
 TPCH_SF=100 ./duckdb/run_duckdb.sh
 
 # explicit parquet path and query list
-TPCH_PARQUET=results/parquet RUNS=5 WARMUPS=1 ./duckdb/run_duckdb.sh "1 6 9"
+TPCH_PARQUET=duckdb/results/parquet RUNS=5 WARMUPS=1 ./duckdb/run_duckdb.sh "1 6 9"
 ```
 
-Output defaults to `results/duckdb_runs.csv`:
+Output defaults to `duckdb/results/duckdb_runs.csv`:
 
 ```csv
 engine,scale_factor,query,run,status,seconds,rows_or_error

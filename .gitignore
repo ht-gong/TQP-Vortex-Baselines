@@ -2,8 +2,6 @@
 docker-all/data/
 
 # pulled repo
-dpfproto/DPFProto
-dpfproto/DPFProto-ramdisk
 dpfproto/data
 dpfproto/logs/
 
@@ -11,6 +9,7 @@ dpfproto/logs/
 
 # ---- large generated data (regenerate via the gen pipelines) ----
 results/parquet/
+duckdb/results
 
 # ---- benchmark intermediates: results/all_results.csv is the ONLY kept results
 # file; every per-run / per-SF / detail CSV is a throwaway (runners merge into

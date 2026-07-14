@@ -14,26 +14,7 @@ DATA_BASE="$ROOT/data/tpch"
 DEV_BASE="/dev/shm/dpfproto_golap_filedev/sf${SF}"
 LOG_DIR="$ROOT/logs/golap_ramdisk/$(date +%Y%m%d_%H%M%S)"
 
-# list of patches that need to be applied
-# the reason this is here is bc I dont want to save a copy of the GOLAP repo
 cd "$DPF_ROOT"
-NEED_CLEAN=0
-PATCHES=(
-  "$ROOT/patches/0001-tmpfs-odirect-fallback.patch"
-  "$ROOT/patches/0002-q5-sm86-cuda-arch.patch"
-  "$ROOT/patches/0003-global-sm86-cuda-arch.patch"
-)
-
-# apply local patches
-for patch in "${PATCHES[@]}"; do
-  if git apply --reverse --check "$patch" >/dev/null 2>&1; then
-    echo "patch already applied $patch"
-  else
-    git apply "$patch"
-    NEED_CLEAN=1
-    echo "applied patch $patch"
-  fi
-done
 
 # build binaries
 export DPF_DEPS=$HOME/.local/dpfproto-deps
@@ -46,11 +27,6 @@ export LIBRARY_PATH=$DPF_DEPS/lib:$DPF_DEPS/lib64:${LIBRARY_PATH:-}
 export CMAKE_PREFIX_PATH=$DPF_DEPS:${CMAKE_PREFIX_PATH:-}
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=86
-CLEAN_MARKER="build/.sm86_clean_done"
-if [[ "$NEED_CLEAN" == 1 || ! -f "$CLEAN_MARKER" ]]; then
-  cmake --build build --target clean
-  touch "$CLEAN_MARKER"
-fi
 make -C build -j"$(nproc)" tpchdb tpchloader
 
 mkdir -p "$DEV_BASE" "$LOG_DIR"

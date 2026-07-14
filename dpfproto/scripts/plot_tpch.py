@@ -28,6 +28,7 @@ def plot(df, cols, title, ylabel, out):
 
 
 def plot_io(df, out):
+    df = df.sort_values("query_n")
     x = range(len(df))
     fig, left = plt.subplots(figsize=(10, 4.8))
     right = left.twinx()
@@ -99,10 +100,12 @@ def main():
     df.to_csv(out.with_suffix(".csv"), index=False)
 
     # plot runtime
-    ax = df.pivot(index="query", columns="mode", values="avg_ms").plot(kind="bar", figsize=(9, 4.5))
+    order = df.drop_duplicates("query").sort_values("query_n")["query"]
+    wide = df.pivot(index="query", columns="mode", values="avg_ms").reindex(order)
+    ax = wide.plot(kind="bar", figsize=(9, 4.5))
     ax.set_xlabel("TPC-H query")
     ax.set_ylabel("Average runtime (ms)")
-    ax.set_title("DPFProto TPC-H")
+    ax.set_title("GOLAP TPC-H")
     plt.tight_layout()
     plt.savefig(out, dpi=200)
     plt.close()

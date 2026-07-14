@@ -11,7 +11,7 @@ import duckdb
 SF = sys.argv[1] if len(sys.argv) > 1 else "100"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = f"{ROOT}/dpfproto/data/tpch"
-OUT = sys.argv[2] if len(sys.argv) > 2 else f"{ROOT}/results/parquet"
+OUT = sys.argv[2] if len(sys.argv) > 2 else f"{ROOT}/duckdb/results/parquet"
 
 SCHEMA = {
     "lineitem": [("l_orderkey", "BIGINT"), ("l_partkey", "INTEGER"), ("l_suppkey", "INTEGER"), ("l_linenumber", "BIGINT"), ("l_quantity", "DECIMAL(15,2)"), ("l_extendedprice", "DECIMAL(15,2)"), ("l_discount", "DECIMAL(15,2)"), ("l_tax", "DECIMAL(15,2)"), ("l_returnflag", "VARCHAR"), ("l_linestatus", "VARCHAR"), ("l_shipdate", "DATE"), ("l_commitdate", "DATE"), ("l_receiptdate", "DATE"), ("l_shipinstruct", "VARCHAR"), ("l_shipmode", "VARCHAR"), ("l_comment", "VARCHAR")],

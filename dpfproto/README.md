@@ -264,5 +264,75 @@ rebuilds the touched binaries before running:
 
 ```bash
 cd ~/work/TQP-Vortex-Baselines
-dpfproto/scripts/run_golap_ramdisk.sh
+SF=100 DEVICE_SIZE=64G dpfproto/scripts/run_golap_ramdisk.sh
+
+# same run documented as a wrapper
+dpfproto/scripts/run_golap_ramdisk_sf100.sh
 ```
+
+Defaults are SF100, 64 GB per tmpfs device image, 3 trials, and q1 q3 q5 q6 q13
+q16. Logs land under `dpfproto/logs/golap_ramdisk/<timestamp>/`.
+
+## Further Investigation
+
+
+### Are GOLAP OOMs caused when intermediates grow large?
+
+- Intermediates: temporary data created during query execution before final answer
+
+- Method: 
+  - If memory rises with SF and crosses the GPU limit at the failing SF, q5 OOM is explained by scale GPU memory pressure
+    - secondary question: why does q5 still fail if they claim to spill seamlessly to disk?
+    - status
+    - runtime
+    - peak GPU memory
+    - last printed query metadata
+    - OOM allocation sites (important)
+  
+  - plot
+    - x axis = SF
+    - y axis = peak GPU memory GB
+    - RTX 3090 usable VRAM as a line 
+
+
+### Is GOLAP bottlenecked on GPU compute when run on RTX3090?
+
+- Whether GOLAP is limited by the GPU's compute/decompression/query kernels instead of storage
+
+- Method:
+  - Pick q1 and q6
+  - Measure ramdisk runtime and throughput, 1st check that its not already compute bottlenecked
+  - Minimal evidence to proof:
+    - Ramdisk IO throughput 
+    - Effective throughput
+    - GPU util
+    - CPI IOwait near zero
+
+
+  - dd if=/dev/shm/dpfproto_golap_filedev/sf100/dev0.img of=/dev/null bs=1M count=8192
+
+Signs of compute bottleneck:
+CPU iowait near 0
+GPU util high
+ramdisk io_throughput_gbs comfortably below possible ramdisk bandwidth
+runtime stable even though storage is much faster
+
+### How large does storage pruning affect the runtime for GOLAP?
+
+- Storage pruning: skipping chunks via metadata before reading them
+
+- Method:
+  - Run queries with pruning enabled vs disabled
+  - q6 -> simple selective predicates
+  - q1 -> control query
+  - collect:
+    - runtime
+    - read_mb
+    - uncompressed_read_mb
+    - io_reduction_ratio
+    - effective_throughput_gbs
+
+  - expecting q6 to be affected more than q1
+
+
+
