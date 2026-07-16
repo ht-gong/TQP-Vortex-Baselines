@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SF=100
-QUERIES=q5
+export QUERIES=q5
 TRIALS=1
 THREADS=1
 DEVICE_SIZE=64G 
