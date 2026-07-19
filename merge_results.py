@@ -11,7 +11,7 @@ so no per-run/per-SF CSVs are kept around. Idempotent; atomic write.
 """
 import csv, os, sys
 
-ENGINE_ORDER = ["polars_cpu", "sirius", "polars_gpu", "rapids"]
+ENGINE_ORDER = ["polars_cpu", "duckdb_cpu", "sirius", "polars_gpu", "rapids"]
 FIELDS = ["engine", "scale_factor", "query", "status", "seconds", "rows_or_error"]
 
 

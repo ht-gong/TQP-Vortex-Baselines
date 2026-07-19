@@ -11,6 +11,7 @@ SF500**, run on a Vast.ai instance with 2× NVIDIA RTX 5090 (Blackwell, 32 GB),
 | Spark 3.5.8 + RAPIDS Accelerator 26.04.2 (GPU) | `rapids/` |
 | Polars 1.41 — CPU streaming, and cudf-polars 26.6 — GPU | `polars/` |
 | Sirius (GPU-native SQL, DuckDB extension, out-of-core) | `sirius/` |
+| DuckDB 1.5 — CPU, in-memory tables | `duckdb/` |
 | NDS-H (TPC-H) data + query generator | `rapids/nds_h_pipeline.sh` (+ upstream clones) |
 
 ## Layout
@@ -22,6 +23,7 @@ polars/        native-Polars TPC-H q1-22 + CPU/GPU runners
                (tpch_queries.py, run_tpch_polars.py, run_polars*.sh)
 sirius/        Sirius GPU-native SQL engine runner + gpu_execution config + setup
                (setup_sirius.sh, sirius.yaml, run_tpch_sirius.py, run_sirius.sh)
+duckdb/        DuckDB CPU baseline runner (run_duckdb.sh, run_tpch_duckdb.py)
 results/    results + the query stream (queries/), CSVs, write-ups, LaTeX table
 docker/        self-contained Docker image: Spark-RAPIDS + GPU Polars + NDS-H gen,
                produces the GPU comparison table  (see docker/README.md)
@@ -83,7 +85,7 @@ matrices, per-engine scaling) is a one-line pivot of this file.
 
 | column | type | values / meaning |
 |--------|------|------------------|
-| `engine` | string | `polars_cpu` (Polars streaming, CPU) · `polars_gpu` (cudf-polars, GPU) · `rapids` (Spark + RAPIDS, GPU) · `sirius` (Sirius, GPU) |
+| `engine` | string | `polars_cpu` (Polars streaming, CPU) · `duckdb_cpu` (DuckDB, CPU, in-memory tables) · `polars_gpu` (cudf-polars, GPU) · `rapids` (Spark + RAPIDS, GPU) · `sirius` (Sirius, GPU) |
 | `scale_factor` | int | TPC-H scale factor: `30`, `50`, `100`, `300`, `500` (≈ GB of raw data) |
 | `query` | string | `query1` … `query22` (TPC-H q1–q22) |
 | `status` | string | `OK` completed · `FAIL` engine error (a GPU out-of-memory appears here, with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` disk-watchdog killed it (free scratch < threshold) · `TIMEOUT` exceeded the per-query timeout |

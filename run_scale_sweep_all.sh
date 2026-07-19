@@ -12,7 +12,7 @@
 set -uo pipefail
 
 SFS="${1:-30 50 100 300}"
-ENGINES="${ENGINES:-polars_cpu rapids polars_gpu}"
+ENGINES="${ENGINES:-polars_cpu duckdb_cpu rapids polars_gpu}"
 BASE="/workspace/baseline"
 SHM="/dev/shm"
 RESULTS="${BASE}/results"
@@ -43,6 +43,7 @@ run_engine(){         # $1=engine  $2=parquet_dir  $3=SF
   case "${e}" in
     rapids)     TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${BASE}/rapids/run_tpch_safe.sh" ;;
     polars_cpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${BASE}/polars/run_polars.sh" ;;
+    duckdb_cpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${BASE}/duckdb/run_duckdb.sh" ;;
     polars_gpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${BASE}/polars/run_polars_gpu.sh" ;;
     *) log "    unknown engine ${e}"; return 1 ;;
   esac
