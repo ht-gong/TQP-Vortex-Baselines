@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+TAG=q1_sf100
 SF=100
 export QUERIES=q5
 TRIALS=1

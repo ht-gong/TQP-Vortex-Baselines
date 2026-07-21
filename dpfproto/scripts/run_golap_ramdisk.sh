@@ -9,10 +9,13 @@ SF="${SF:-100}"
 THREADS="${THREADS:-1}"
 TRIALS="${TRIALS:-3}"
 QUERIES="${QUERIES:-q1 q3 q5 q6 q13 q16}"
+ZONEMAP="${ZONEMAP:-0}"
+TAG="${TAG:-}"
 DEVICE_SIZE="${DEVICE_SIZE:-64G}"
 DATA_BASE="$ROOT/data/tpch"
 DEV_BASE="/dev/shm/dpfproto_golap_filedev/sf${SF}"
 LOG_DIR="$ROOT/logs/golap_ramdisk/$(date +%Y%m%d_%H%M%S)"
+[[ -n "$TAG" ]] && LOG_DIR+="_$TAG"
 
 cd "$DPF_ROOT"
 
@@ -42,9 +45,12 @@ for i in 0 1 2 3; do
   truncate -s "$DEVICE_SIZE" "$DEV_BASE/dev${i}.img"
 done
 DEVICES_NVME="$DEV_BASE/dev0.img,$DEV_BASE/dev1.img,$DEV_BASE/dev2.img,$DEV_BASE/dev3.img"
+TPCH_ARGS=()
+[[ "$ZONEMAP" == 1 ]] && TPCH_ARGS=(-Z)
 
 echo "DATA_BASE=$DATA_BASE"
 echo "DEVICES_NVME=$DEVICES_NVME"
+echo "ZONEMAP=$ZONEMAP"
 echo "LOG_DIR=$LOG_DIR"
 
 # load pages
@@ -64,6 +70,7 @@ for q in $QUERIES; do
       -q "$q" \
       -x gidp \
       -w "$THREADS" \
+      "${TPCH_ARGS[@]}" \
       "$DEVICES_NVME"; then
     echo "failed $q" | tee -a "$LOG_DIR/failed.txt"
     FAILED=1

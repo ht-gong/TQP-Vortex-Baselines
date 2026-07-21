@@ -328,14 +328,52 @@ GPU util high
 ramdisk io_throughput_gbs comfortably below possible ramdisk bandwidth
 runtime stable even though storage is much faster
 
+
+
+It doesn't look like that GPU is the primary bottle neck. Evidence points to mixed pipeline cost in decompression, transfer, and syncs.
+
+Q1:
+runtime: 800 ms
+actual data read: 6173 MB
+logical data processed: 16128 MB
+GPU memory allocated: 17.9 GB
+
+CPU iowait very low:
+cpu_usage[
+	user: 2464
+	nice: 0
+	system: 3656
+	idle 635743,
+	iowait: 42
+]
+
+Q6:
+runtime: 758 ms
+actual data read: 4636 MB
+logical data processed: 9216 MB
+GPU memory allocated: 10.2 GB
+cpu_usage[
+  user: 2306
+  nice: 0
+  system: 3548
+  idle: 625518
+  iowait: 55
+]
+
+- This shows that Q1 is not limited by saturated GPU compute 
+- Nsight shows bursty GPU activity with GPUs
+  - especially looking at the compute in flight section
+- GOLAP has GPU-compute-saturated phases, but end-to-end Q1/Q6 runtime is not proven to be purely GPU-compute-bound 
+  - The remaining delay is likely pipeline synchronization and data movement
+
+
+
 ### Q3: How large does storage pruning affect the runtime for GOLAP?
 
 - Storage pruning: skipping chunks via metadata before reading them
 
 - Method:
-  - Run queries with pruning enabled vs disabled
-  - q6 -> simple selective predicates
-  - q1 -> control query
+  - Compare end-to-end runtime with pruning disabled versus enabled for the full standard GOLAP query set
   - collect:
     - runtime
     - read_mb
@@ -344,6 +382,26 @@ runtime stable even though storage is much faster
     - effective_throughput_gbs
 
   - expecting q6 to be affected more than q1
+
+- At SF100, storage pruning substantially improves selective queries
+  - Q3 improves by 4.19x and Q6 by 2.76x. Q1, Q13, and Q16 show no meaningful improvement
+  - This shows that pruning only helps when query predicates allow GOLAP to skip many storage pages
+  - One more note is Q5 still OOMs because its failure occurs during GPU buffer allocation before pruning is applied
+
+
+| Query | Pruning off | Pruning on | Result |
+|---|---:|---:|---:|
+| Q1 | 586 ms | 594 ms | no benefit |
+| Q3 | 1903 ms | 454 ms | 4.19x faster |
+| Q6 | 536 ms | 194 ms | 2.76x faster |
+| Q13 | 1385 ms | 1378 ms | no meaningful change |
+| Q16 | 471 ms | 468 ms | no meaningful change |
+| Q5 | OOM | OOM | unchanged |
+
+
+Q5 is scale-limited by its GPU buffer allocation. It fits at SF1, but at SF100 its required GPU-resident buffers exceed the RTX 3090’s 24 GB VRAM. This is not a fixed bug that happens at every scale, and pruning does not help because the OOM occurs before query execution and pruning.
+
+
 
 
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-LOG_DIR="$ROOT/logs/golap_ramdisk/20260709_164701"
+LOG_DIR="$ROOT/logs/golap_ramdisk/20260718_214537_pruning_on"
 
 if [[ ! -d "$LOG_DIR" ]]; then
   LOG_DIR="$(find "$ROOT/logs/golap_filedev" -mindepth 1 -maxdepth 1 -type d | sort | tail -1)"
