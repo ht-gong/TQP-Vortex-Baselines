@@ -14,14 +14,16 @@ TAG="${TAG:-}"
 DEVICE_SIZE="${DEVICE_SIZE:-64G}"
 DATA_BASE="$ROOT/data/tpch"
 DEV_BASE="/dev/shm/dpfproto_golap_filedev/sf${SF}"
-LOG_DIR="$ROOT/logs/golap_ramdisk/$(date +%Y%m%d_%H%M%S)"
-[[ -n "$TAG" ]] && LOG_DIR+="_$TAG"
+if [[ -z "${LOG_DIR:-}" ]]; then
+  LOG_DIR="$ROOT/logs/golap_ramdisk/$(date +%Y%m%d_%H%M%S)"
+  [[ -n "$TAG" ]] && LOG_DIR+="_$TAG"
+fi
 
 cd "$DPF_ROOT"
 
 # build binaries
 export DPF_DEPS=$HOME/.local/dpfproto-deps
-export CUDA_HOME=/usr/local/cuda-13.2
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export CUDA_PATH=$CUDA_HOME
 export PATH=$CUDA_HOME/bin:$CUDA_HOME/gds/tools:$DPF_DEPS/bin:$PATH
 export PKG_CONFIG_PATH=$DPF_DEPS/lib/pkgconfig:$DPF_DEPS/lib64/pkgconfig:${PKG_CONFIG_PATH:-}

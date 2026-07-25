@@ -35,7 +35,7 @@ for patch in "${ARCH_PATCHES[@]}"; do
 done
 
 export DPF_DEPS=$HOME/.local/dpfproto-deps
-export CUDA_HOME=/usr/local/cuda-13.2
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 export CUDA_PATH=$CUDA_HOME
 export PATH=$CUDA_HOME/bin:$CUDA_HOME/gds/tools:$DPF_DEPS/bin:$PATH
 export PKG_CONFIG_PATH=$DPF_DEPS/lib/pkgconfig:$DPF_DEPS/lib64/pkgconfig:${PKG_CONFIG_PATH:-}

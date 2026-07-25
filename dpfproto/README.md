@@ -1,5 +1,6 @@
 # GOLAP and DPFProto Baseline
 
+More of a general note file; instructions here are not clear
 
 ## Paper notes
 GOLAP: 
@@ -148,12 +149,7 @@ scripts/tpch/run_dbgen.local.sh 1 $(nproc) "$DATA_BASE"
 find "$DATA_BASE/input1" -maxdepth 2 -type f | head -20
 
 # prepare sideways/GOLAP-style data
-# DPFProto's sideways script writes to /export by default, so patch a local copy.
-cp scripts/golap/01_sideways_pruning.sh scripts/golap/01_sideways_pruning.local.sh
-sed -i 's|^INPUT_BASE_DIR="/export/data1/tpch/input${SF}"|DATA_BASE="${DATA_BASE:-/export/data1/tpch}"\
-INPUT_BASE_DIR="${DATA_BASE}/input${SF}"|' scripts/golap/01_sideways_pruning.local.sh
-sed -i 's|^OUTPUT_BASE_DIR="/export/data1/tpch/sideways/sf${SF}"|OUTPUT_BASE_DIR="${DATA_BASE}/sideways/sf${SF}"|' scripts/golap/01_sideways_pruning.local.sh
-DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning.local.sh -s 1 -n $(nproc)
+DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning_data_base.sh -s 1 -n $(nproc)
 
 # run full non-BaM suite
 scripts/tpch_run_all.sh \
@@ -194,7 +190,7 @@ cd dpfproto/DPFProto
 scripts/tpch/run_dbgen.sh 100 "$(nproc)" "$DATA_BASE"
 
 # GOLAP sideway layout SF100
-DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning.local.sh -s 100 -n "$(nproc)"
+DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning_data_base.sh -s 100 -n "$(nproc)"
 
 # sanity check
 find "$DATA_BASE/input100" -maxdepth 2 -type f | head
@@ -215,7 +211,7 @@ export DATA_BASE=$HOME/work/TQP-Vortex-Baselines/dpfproto/data/tpch
 
 # 1. Prepare GOLAP-style sideways data.
 # No sudo needed: this only reads/writes files under DATA_BASE.
-DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning.local.sh -s ${SF} -n ${THREADS}
+DATA_BASE="$DATA_BASE" bash scripts/golap/01_sideways_pruning_data_base.sh -s ${SF} -n ${THREADS}
 
 # 2. Load GOLAP-style compressed layout.
 # Sudo needed: this writes DPFProto pages to DEVICES_NVME.
@@ -400,6 +396,80 @@ cpu_usage[
 
 
 Q5 is scale-limited by its GPU buffer allocation. It fits at SF1, but at SF100 its required GPU-resident buffers exceed the RTX 3090’s 24 GB VRAM. This is not a fixed bug that happens at every scale, and pruning does not help because the OOM occurs before query execution and pruning.
+
+
+## Final 
+
+The benchmark reads `dpfproto/data/tpch/sideways/sf300`. Keep this directory on
+host disk and mount it read-only into Docker. It is input data, not a result.
+
+0. Construct docker reproducibility -> DONE
+  1. documented command for: build binaries, load SF300 data, run both pruning modes, plotting
+  2. mount data results
+  3. document ramdisk and cuFile-compat requirements
+
+1. Create SF300 sideways data; do all necessary checking -> DONE
+2. Run pruning/no-pruning on data
+  1. Run SF300 ZONEMAP=0
+  2. Run ZONEMAP=1
+
+3. Produce the paper table
+  1. look up table format for paper?
+
+4. Paragraph length analysis on GOLAP scaling issues seen previously
+  1. Describe pruning effects with pruning on/off (Q3, Q6)
+  2. Describe existing bottlenecks and how our paper resolves these
+
+dig a bit deeper into the reason
+- why do we have cuFile calls?
+- why does the GPU gets called intermittently? 
+- Are there any forced sync points? 
+- How does CPU/GPU co-process the data
+- how does everything fit into the larger picture in both the GOLAP paper and GPU database execution in general
+
+This paragraph describes the scaling issues scene on GOLAP on TCP-H queries at high scale factors. 
+
+when intermediate results exceed GPU memory, GOLAP falls back to GPU-CPU co-execution rather than keeping the entire pipeline GPU-resident.
+GOLAP avoids loading the entire input relation into GPU memory by streaming compressed table chunks from SSD and processing them incrementally.
+
+However, certain situatios can still result OOM on intermediates when they are not spillable and are required to be present on the GPU at once.
+
+- GOLAP mainly attacks storage -> GPU ingress
+  - storage
+
+- cuFileRead is the GPU Direct Storage API used to move data from an NVMe/file-backed device directly into GPU memory
+  - It avoids the traditional bounce-buffer path (storage → CPU buffer → cudaMemcpy → GPU)
+  - The important qualification is that GDS is direct in the data path, but still CPU-controlled. CPU threads submit the cuFileRead requests and coordinate the buffers. GOLAP deliberately uses synchronous GDS calls issued by multiple CPU threads because the paper found that its asynchronous GDS path did not saturate storage bandwidth reliably.
+
+- Query runs are done as a seuqnece of dependent stage
+  - rage compressed chunks -> wait until. required columns arrive -> decompress -> query kernel -> materialize/transfer output -> next chunk
+
+- Pruning is effective only when predicates can rule out many chunks
+  - It does not solve Q5 because Q5’s failure happens when allocating large GPU-resident intermediate buffers, before pruning can reduce the problematic state
+
+ROTAS deals with these:
+B. PCIe transfer and pipeline overlap
+C. GPU-resident intermediate capacity
+page-based CPU/GPU buffer management;
+spillable intermediate streams;
+external radix-partitioned joins and group-by;
+dataflow-aware eviction;
+adaptive division between ephemeral memory and the swap buffer;
+compression chosen according to compute-versus-PCIe balance;
+UVA gather for sparse late materialization.
+
+
+
+## Docker
+1. Build fixed image with CUDA 13.2, compiler, CMake, and DPFProto dependencies
+2. Find a way to deal with data -> regenerate or mount
+3. Mount dpfproto/logs/ back to host -> persist results
+4. Given container the GPU and a large /dev/shm -> maybe not necessary? Bc this was more a logical solution
+5. Run existing GOLAP runner twice
+6. Generate comparison plot in proper paper format
+
+
+
 
 
 

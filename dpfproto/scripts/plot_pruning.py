@@ -22,6 +22,7 @@ def main():
     parser.add_argument("pruning_off")
     parser.add_argument("pruning_on")
     parser.add_argument("--out")
+    parser.add_argument("--sf")
     args = parser.parse_args()
 
     off = Path(args.pruning_off)
@@ -48,7 +49,10 @@ def main():
     )
     ax.set_xlabel("TPC-H query")
     ax.set_ylabel("Mean runtime (ms)")
-    ax.set_title("GOLAP pruning at SF100")
+    title = "GOLAP pruning"
+    if args.sf:
+        title += f" at SF{args.sf}"
+    ax.set_title(title)
     ax.legend(["pruning off", "pruning on"])
     plt.tight_layout()
     plt.savefig(out, dpi=200)
