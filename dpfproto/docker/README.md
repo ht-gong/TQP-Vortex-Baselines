@@ -7,8 +7,21 @@ instructions below; Docker mounts that data and does not generate it.
 
 - Docker with NVIDIA Container Toolkit
 - NVIDIA driver 580.82.07 or newer
+- This repository with `dpfproto/DPFProto` checked out locally
 - SF300 input at `../data/tpch/sideways/sf300`
 - 512 GB free host RAM in `/dev/shm`
+
+### Get DPFProto
+
+From the baseline repository root:
+
+```bash
+git clone --branch golap-magnum-baseline \
+  https://github.com/wangychn/DPFProto.git dpfproto/DPFProto
+```
+
+This branch contains the ramdisk runner and Q3/Q5 memory tuning. Docker copies
+this local checkout; it does not clone DPFProto itself.
 
 ### Prepare SF300 data
 
