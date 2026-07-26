@@ -69,3 +69,18 @@ python3 "${NDSH_DIR}/nds_h_gen_query_stream.py" "${SCALE}" 1 "${QUERIES}" || {
 
 rm -rf "${WORK}"
 log "DONE. parquet=$(du -sh "${FINAL}"|cut -f1)  tables=$(ls "${FINAL}"|wc -l)  stream=${QUERIES}/stream.sql"
+
+# Best-effort provenance check: is this clean external NDS-H? (Hard-enforced in
+# rapids/nds_h_pipeline.sh; warn-only here so image builds don't hard-fail on a
+# missing pyarrow.) See results/GENERATOR.md.
+VALIDATOR=""
+for c in "$(dirname "${BASH_SOURCE[0]}")/../../../results/validate_dataset.py" \
+         "/workspace/baseline/results/validate_dataset.py"; do
+  [ -f "${c}" ] && VALIDATOR="${c}" && break
+done
+if [ -n "${VALIDATOR}" ]; then
+  python3 "${VALIDATOR}" "${FINAL}" "${SCALE}" \
+    || log "WARN: dataset failed provenance validation (see results/GENERATOR.md)"
+else
+  log "WARN: validate_dataset.py not found; skipping provenance check"
+fi

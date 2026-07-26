@@ -70,6 +70,14 @@ fine at smaller SF). Polars-GPU degrades into PCIe spill; Spark-RAPIDS carries
 high fixed per-query overhead but completes all 22 at every scale (spilling
 gracefully to its 200 GB host store, given ramdisk shuffle scratch).
 
+> **Provenance caveat (2026-07-25 audit — `results/GENERATOR.md`).** Only the
+> **SF500** row above ran on the clean external NDS-H dataset. The SF30/100/300
+> numbers ran on self-generated (DuckDB/cudf) or corrupt-legacy-NDS-H parquet —
+> not the required generator — so `all_results.csv` now keeps the certified SF500
+> slice only, and SF30/50/100/300 are archived under `results/archive/` pending a
+> clean regenerate-and-re-run. Rows here are kept for the scaling story but are
+> provisional below SF500.
+
 **Takeaway:** on a single 32 GB GPU at SF500, CPU Polars beats every GPU engine —
 the GPUs are bottlenecked spilling large joins to host over PCIe, and the very
 heaviest joins even OOM Sirius outright. Multi-GPU (2 executors / `num_gpus: 2`)
@@ -78,15 +86,18 @@ is the natural next step.
 ## Results data — `results/all_results.csv`
 
 The single canonical results file (the **only** results CSV kept — everything
-else is a throwaway). One row per `(engine, scale_factor, query)` — 440 rows
-(4 engines × 5 SFs × 22 queries). Each runner writes a temp CSV and upserts its
-slice via `merge_results.py <engine> <sf> <run_csv>`; every other view (summary,
-matrices, per-engine scaling) is a one-line pivot of this file.
+else is a throwaway). One row per `(engine, scale_factor, query)` — currently 110
+rows (5 engines × the certified-clean SF500 × 22 queries; the SF30/50/100/300
+slices are archived under `results/archive/`, see `results/GENERATOR.md`). Each
+runner writes a temp CSV and upserts its slice via `merge_results.py <engine>
+<sf> <run_csv>`; every other view (summary, matrices, per-engine scaling) is a
+one-line pivot of this file. Datasets must be clean external NDS-H — validate
+with `results/validate_dataset.py <parquet_dir> <SF>` before running.
 
 | column | type | values / meaning |
 |--------|------|------------------|
 | `engine` | string | `polars_cpu` (Polars streaming, CPU) · `duckdb_cpu` (DuckDB, CPU, in-memory tables) · `polars_gpu` (cudf-polars, GPU) · `rapids` (Spark + RAPIDS, GPU) · `sirius` (Sirius, GPU) |
-| `scale_factor` | int | TPC-H scale factor: `30`, `50`, `100`, `300`, `500` (≈ GB of raw data) |
+| `scale_factor` | int | TPC-H scale factor: `500` (≈ GB of raw data) — the only certified-clean slice; `30/50/100/300` archived pending clean-NDS-H re-run |
 | `query` | string | `query1` … `query22` (TPC-H q1–q22) |
 | `status` | string | `OK` completed · `FAIL` engine error (a GPU out-of-memory appears here, with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` disk-watchdog killed it (free scratch < threshold) · `TIMEOUT` exceeded the per-query timeout |
 | `seconds` | float | per-query wall-clock seconds, **cold** run, engine startup excluded (a warm-up query absorbs JVM/GPU/JIT init). For a failure this is time-to-failure; `NA` for a watchdog kill |
