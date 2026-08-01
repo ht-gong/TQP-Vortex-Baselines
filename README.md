@@ -1,99 +1,107 @@
-# TPC-H GPU baseline — Spark-RAPIDS vs Polars
+# TPC-H engine comparison — Spark-RAPIDS · Polars-GPU · DuckDB · Sirius
 
-Benchmark harness and results comparing **GPU and CPU query engines on TPC-H
-SF500**, run on a Vast.ai instance with 2× NVIDIA RTX 5090 (Blackwell, 32 GB),
-256 cores, 1 TB RAM.
+A harness that runs TPC-H q1–q22 across several query engines on the **same**
+parquet dataset and collects per-query runtimes into one results file. Everything
+runs from a single entry point, `./run.sh`.
 
-## Engines compared
+## Engines
 
-| Engine | Where |
-|--------|-------|
-| Spark 3.5.8 + RAPIDS Accelerator 26.04.2 (GPU) | `rapids/` |
-| Polars 1.41 — CPU streaming, and cudf-polars 26.6 — GPU | `polars/` |
-| Sirius (GPU-native SQL, DuckDB extension, out-of-core) | `sirius/` |
-| NDS-H (TPC-H) data + query generator | `rapids/nds_h_pipeline.sh` (+ upstream clones) |
+| key | engine | dir |
+|-----|--------|-----|
+| `rapids` | Spark + RAPIDS Accelerator (GPU) | `rapids/` |
+| `polars_gpu` | cudf-polars (GPU) | `polars/` |
+| `duckdb_cpu` | DuckDB (CPU) | `duckdb/` |
+| `sirius` | Sirius — GPU-native SQL, DuckDB extension | `sirius/` |
+| `polars_cpu` | Polars streaming (CPU) — optional | `polars/` |
+
+Default engine set: `rapids polars_gpu duckdb_cpu sirius`.
+
+## Quick start
+
+```bash
+./run.sh                       # default engines, SF30..SF700
+./run.sh 30-300                # SF30,50,100,300
+ENGINES="duckdb_cpu" ./run.sh 500 700
+```
+
+`run.sh` is the one entry point. For each requested scale factor it: ensures the
+dataset exists on disk (generating it with the NDS-H pipeline if missing),
+validates it is clean external NDS-H, stages it disk → ramdisk, runs each
+requested engine against the ramdisk copy, then frees the ramdisk. Each engine
+folds its 22 rows into `results/all_results.csv`.
+
+**Arguments** — `SF_SPEC`: scale factors to run, as bare numbers (`100`) or an
+inclusive range over the canonical set `{30,50,100,300,500,700}` (`30-300`).
+Default: `30 50 100 300 500 700`.
+
+**Environment** —
+
+| var | meaning |
+|-----|---------|
+| `ENGINES` | space-separated engines, in run order (default above) |
+| `DATA_DIR` | on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `./data`) |
+| `SHM` | ramdisk root (default `/dev/shm`) |
+| `QUERIES` | query subset (default `1..22`) |
+| `KEEP_RAMDISK=1` | keep the staged ramdisk copy after each SF |
+| `GEN_PARALLEL` / `GEN_BATCH` | override NDS-H generation chunking |
+
+`DRIVER_MEM`, `SPARK_SCRATCH`, `GPU_PART_MB`, `MIN_FREE_GB`, etc. pass through to
+the individual runners.
+
+## Data — one generator for every engine
+
+All engines must read byte-identical parquet, and it must come from the **NDS-H**
+generator (official TPC-H dbgen → Spark transcode, writer `parquet-mr`). Never
+point a runner at self-written parquet (DuckDB's own `CALL dbgen` export, cudf
+exports); it is not comparable to the external standard. Generate a dataset with:
+
+```bash
+rapids/nds_h_pipeline.sh <SF> <PARALLEL> <BATCH> <out_dir>   # -> <out_dir>/parquet/<table>/
+python3 results/validate_dataset.py <parquet_dir> <SF>       # must print VALID
+```
+
+`run.sh` generates missing datasets automatically and validates before every run.
+Full rules and rationale: **`results/GENERATOR.md`**.
 
 ## Layout
 
 ```
-rapids/        Spark-RAPIDS runner + per-query safe driver + spark config
-               (run_tpch_queries.py, run_tpch_safe.sh, activate.sh, conf/)
-polars/        native-Polars TPC-H q1-22 + CPU/GPU runners
-               (tpch_queries.py, run_tpch_polars.py, run_polars*.sh)
-sirius/        Sirius GPU-native SQL engine runner + gpu_execution config + setup
-               (setup_sirius.sh, sirius.yaml, run_tpch_sirius.py, run_sirius.sh)
-results/    results + the query stream (queries/), CSVs, write-ups, LaTeX table
-docker/        self-contained Docker image: Spark-RAPIDS + GPU Polars + NDS-H gen,
-               produces the GPU comparison table  (see docker/README.md)
+run.sh         single entry point (stage -> run engines -> free, per SF)
+rapids/        Spark-RAPIDS runner + NDS-H generate/transcode pipeline
+polars/        Polars CPU/GPU runners + native TPC-H q1-22
+sirius/        Sirius runner + gpu_execution config + setup
+duckdb/        DuckDB CPU runner
+results/       all_results.csv, query stream (queries/), validator, GENERATOR.md
+docker/        self-contained image: engines + NDS-H generator (see docker/README.md)
 ```
 
-Not committed (regenerate / re-download): the 180 GB SF500 parquet
-(`results/parquet/`), python venvs, the RAPIDS jar, the conda env, and the
-upstream clones (`tpch-kit`, `spark-rapids-benchmarks`, `lancelot`). See
-`docker/README.md` to rebuild data + results reproducibly.
+Not committed (regenerate / re-download): the parquet datasets, python venvs, the
+RAPIDS jar, conda envs, and the upstream generator clones. See `docker/README.md`
+to rebuild reproducibly.
 
-## Headline results (SF500, per-query seconds, startup excluded)
+## Results — `results/all_results.csv`
 
-| Engine | Total | Notes |
-|--------|------:|-------|
-| Polars CPU | ~366 s | fastest here — 122 threads, 1 TB RAM, no spill pressure |
-| Spark-RAPIDS GPU | ~1102 s | single 32 GB GPU, host-memory spill; all 22 complete |
-| Sirius GPU | 439 s* | *17/22 queries; 5 heaviest joins OOM on one 32 GB GPU |
-| Polars GPU (cudf-polars) | ~2645 s | single GPU; spill-bound joins dominate |
-
-\*Sirius total is over the **17 queries it completed** (q3/q8/q9/q10/q21 OOM). On
-those **same 17 queries**, Sirius runs in **439 s** vs Spark-RAPIDS **640 s** and
-Polars-CPU **164 s** — so Sirius is ~1.5× faster than Spark-RAPIDS where it fits,
-but Spark-RAPIDS (200 GB host spill store) is the more robust single-GPU engine.
-
-Per-query tables: `results/QUERY_RESULTS.md`, `results/POLARS_RESULTS.md`,
-`results/gpu_runtimes.tex`, and the canonical `results/all_results.csv`
-(every engine × SF × query). All completed-query result row counts match across
-engines.
-
-**Scale-factor sweep — all four engines** (`sirius/run_scale_sweep.sh` +
-`run_scale_sweep_all.sh`) runs q1-22 at SF30/50/100/300/500 to show query time vs
-data size (headline table also in `AGENTS.md`). Total completed-query seconds:
-
-| SF | Polars-CPU | Sirius GPU | Polars-GPU | Spark-RAPIDS |
-|---:|-----------:|-----------:|-----------:|-------------:|
-| 30 | 26 | 43 | 34 | 333 |
-| 100 | 96 | 91 | 105 | 504 |
-| 300 | 243 | 344 (21/22) | 774 | 870 |
-| 500 | 366 | 439 (17/22) | 2645 | 1102 |
-
-CPU-Polars wins at every scale. Sirius is fast and complete to SF100, then the
-heaviest joins OOM the single 32 GB GPU (a data-size wall, not a bug — they run
-fine at smaller SF). Polars-GPU degrades into PCIe spill; Spark-RAPIDS carries
-high fixed per-query overhead but completes all 22 at every scale (spilling
-gracefully to its 200 GB host store, given ramdisk shuffle scratch).
-
-**Takeaway:** on a single 32 GB GPU at SF500, CPU Polars beats every GPU engine —
-the GPUs are bottlenecked spilling large joins to host over PCIe, and the very
-heaviest joins even OOM Sirius outright. Multi-GPU (2 executors / `num_gpus: 2`)
-is the natural next step.
-
-## Results data — `results/all_results.csv`
-
-The single canonical results file (the **only** results CSV kept — everything
-else is a throwaway). One row per `(engine, scale_factor, query)` — 440 rows
-(4 engines × 5 SFs × 22 queries). Each runner writes a temp CSV and upserts its
-slice via `merge_results.py <engine> <sf> <run_csv>`; every other view (summary,
-matrices, per-engine scaling) is a one-line pivot of this file.
+The single canonical results file (the only results CSV kept — everything else is
+a throwaway). One row per `(engine, scale_factor, query)`. Each runner writes a
+temp CSV and upserts its slice via `merge_results.py <engine> <sf> <run_csv>`;
+every other view (summary, matrices, per-engine scaling) is a one-line pivot of
+this file. Do **not** add parallel summary CSVs; pivot this instead.
 
 | column | type | values / meaning |
 |--------|------|------------------|
-| `engine` | string | `polars_cpu` (Polars streaming, CPU) · `polars_gpu` (cudf-polars, GPU) · `rapids` (Spark + RAPIDS, GPU) · `sirius` (Sirius, GPU) |
-| `scale_factor` | int | TPC-H scale factor: `30`, `50`, `100`, `300`, `500` (≈ GB of raw data) |
-| `query` | string | `query1` … `query22` (TPC-H q1–q22) |
-| `status` | string | `OK` completed · `FAIL` engine error (a GPU out-of-memory appears here, with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` disk-watchdog killed it (free scratch < threshold) · `TIMEOUT` exceeded the per-query timeout |
-| `seconds` | float | per-query wall-clock seconds, **cold** run, engine startup excluded (a warm-up query absorbs JVM/GPU/JIT init). For a failure this is time-to-failure; `NA` for a watchdog kill |
-| `rows_or_error` | int / string | result **row count** when `status=OK`; otherwise a short error message |
+| `engine` | string | `rapids` · `polars_gpu` · `duckdb_cpu` · `sirius` · `polars_cpu` |
+| `scale_factor` | int | TPC-H scale factor (≈ GB of raw data) |
+| `query` | string | `query1` … `query22` |
+| `status` | string | `OK` · `FAIL` (engine error; GPU out-of-memory shows here with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` (disk-watchdog kill) · `TIMEOUT` (per-query timeout) |
+| `seconds` | float | per-query wall-clock, engine startup excluded; time-to-failure on error; `NA` on a watchdog kill |
+| `rows_or_error` | int / string | result **row count** when `OK`, else a short error message |
+
+Result row counts must **match across engines at the same scale factor** — a
+mismatch means a correctness bug.
 
 ```csv
 engine,scale_factor,query,status,seconds,rows_or_error
-polars_cpu,100,query1,OK,2.308,4
-sirius,500,query9,FAIL,259.488,INTERNAL Error: ... GPU pipeline task exceeded maximum OOM retry limit (100) for
+rapids,100,query1,OK,2.308,4
 ```
 
 Handy pivots:

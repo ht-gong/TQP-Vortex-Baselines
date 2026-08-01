@@ -1,54 +1,67 @@
 # DuckDB CPU Baseline
 
-Phases
-- Add duckdb_cpu runner
-    - parquet input; use TPC-H dataset same as DPFProto/TQP
-    - just run and match expected results
-- benchmarking
-    - warm up each query
-    - run each multiple times and record results
-- CPU vs. GPU
-    - get runtimes CPU (DuckDB)
-    - get runtime GPU (GOLAP)
-    - remember to collect the hardware used info
+`duckdb_cpu` — DuckDB as the CPU reference point against the GPU engines
+(Sirius, Polars-GPU, Spark-RAPIDS) and Polars-CPU. Same TPC-H parquet dataset,
+same `results/queries/stream_qualification.sql`, same results contract as every
+other engine in this repo (see `AGENTS.md`).
 
-Paper summary
-- Runtime comparison table
-- Speedup table
-- CPU vs. GPU cost table
-- Figures for the Evaluation section
-
-
-## Baseline Running
-Minimal repeated-run DuckDB baseline over the shared TPC-H parquet dataset.
+## Running
 
 ```bash
-# build parquet from existing DPFProto tbl data
-./duckdb/make_parquet.sh 100
+# all 22 queries at SF500, merged into results/all_results.csv
+TPCH_SF=500 TPCH_PARQUET=/root/tpc-h/sf500_parquet ./duckdb/run_duckdb.sh
 
-# GOLAP/DPFProto subset, 1 warmup + 5 measured runs each
-TPCH_SF=100 ./duckdb/run_duckdb.sh
+# a query subset
+TPCH_SF=100 TPCH_PARQUET=/dev/shm/tpch_sf100/parquet ./duckdb/run_duckdb.sh "1 6 9"
 
-# explicit parquet path and query list
-TPCH_PARQUET=duckdb/results/parquet RUNS=5 WARMUPS=1 ./duckdb/run_duckdb.sh "1 6 9"
+# keep the temp CSV instead of merging
+TPCH_MERGE=0 OUT_CSV=/tmp/duckdb.csv ./duckdb/run_duckdb.sh
 ```
 
-Output defaults to `duckdb/results/duckdb_runs.csv`:
+The runner self-merges into `results/all_results.csv` via `merge_results.py` and
+deletes its temp CSV — no per-run/per-SF CSVs, same as the other engines.
+
+## Measurement protocol
+
+Mirrors the local `test.py` flow this baseline came from.
+
+- **Load mode** (`DUCKDB_LOAD_MODE`, default `tables`): the dataset is
+  materialised into in-memory DuckDB tables (`CREATE TABLE AS SELECT` from
+  parquet), then queries run against resident data. **Load time is excluded**
+  from the per-query seconds. Requires RAM ≥ dataset; at SF500 the tables are
+  ~800 GB resident.
+  - `DUCKDB_LOAD_MODE=views` instead creates views over `read_parquet()`, so
+    parquet scan cost lands inside every query — use this to compare against
+    engines that stream from parquet.
+- **Primary keys** (`DUCKDB_PK`, default `0` = off): no PK/ART indexes are
+  built. No TPC-H query plan uses them for its joins, and at SF500 the lineitem
+  index build costs substantial time and memory for no query benefit. Set
+  `DUCKDB_PK=1` to restore them.
+- **Timing** (default `WARMUPS=3 RUNS=1`): three prewarm passes over the query
+  set, then one measured run each — the `test.py` protocol. `RUNS>1` reports the
+  median of the measured runs.
+
+⚠️ **These seconds are WARM.** The `seconds` contract in `AGENTS.md` is cold, and
+that is how `polars_cpu` / `sirius` / `polars_gpu` / `rapids` rows were produced.
+`duckdb_cpu` numbers are therefore a lower bound relative to the other engines in
+the same table — do not read a `duckdb_cpu` vs `polars_cpu` gap as pure engine
+speed. `RUNS=1 WARMUPS=0` produces cold, directly comparable numbers.
+
+Other env knobs: `DUCKDB_THREADS` (defaults to the process CPU affinity, not the
+whole box), `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIR` (spill location), `STREAM`.
+
+## Output
+
+One row per query, folded into `results/all_results.csv`:
 
 ```csv
-engine,scale_factor,query,run,status,seconds,rows_or_error
-duckdb_cpu,500,query1,1,OK,0.007805,1
+engine,scale_factor,query,status,seconds,rows_or_error
+duckdb_cpu,500,query1,OK,10.226,4
 ```
 
-The default query set matches GOLAP/DPFProto: q1, q3, q5, q6, q13, q16. The
-runner uses `results/queries/stream_qualification.sql`, creates DuckDB views over
-`<parquet>/<table>/*.parquet`, warms each query, then records every measured run.
-
-
-## Getting Parquets
+## Getting parquet
 
 ```bash
-./rapids/nds_h_pipeline.sh 1 2 1 /dev/shm/tpch_sf1
-
-
+./rapids/nds_h_pipeline.sh 1 2 1 /dev/shm/tpch_sf1     # generate SF1 to ramdisk
+./duckdb/make_parquet.sh 100                            # from existing DPFProto tbl data
 ```

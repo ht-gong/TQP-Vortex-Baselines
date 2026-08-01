@@ -32,8 +32,6 @@ sirius.yaml          gpu_execution config: 1 GPU, 95% VRAM, 128Gi host tier/NUMA
 run_tpch_sirius.py   parses the shared query stream, runs each query through the Sirius
                      duckdb binary (transparent GPU), times cold+warm, counts result rows
 run_sirius.sh        safe per-query driver: one duckdb process per query + disk watchdog
-run_scale_sweep.sh   scale sweep SF30/50/100/300: gen -> clean -> run -> free, per SF;
-                     rows land in the canonical ../results/all_results.csv
 sirius/              the upstream clone (gitignored; re-create with setup_sirius.sh)
 ```
 
@@ -74,12 +72,14 @@ DRIVER_MEM=120g /workspace/baseline/rapids/nds_h_pipeline.sh 500 1000 25 /dev/sh
 cd /workspace/baseline/sirius
 ./run_sirius.sh                 # queries 1..22
 ./run_sirius.sh "1 6 9"         # a subset
+```
 
-# scale-factor sweep: run q1-22 at SF30/50/100/300 to show query time vs scale.
-# Generates each SF into the ramdisk, cleans + runs it, then frees it before the
-# next (clearing the SF500 ramdisk parquet if it needs the room). All rows land
-# in the single canonical table: results/all_results.csv (via merge_results.py)
-./run_scale_sweep.sh            # SF 30 50 100 300  (override: ./run_scale_sweep.sh "10 30")
+To run Sirius across scale factors (stage each SF into the ramdisk, run it, free
+it), use the central entry point from the repo root — it drives every engine over
+the same datasets and merges into `results/all_results.csv`:
+
+```bash
+ENGINES="sirius" ../run.sh 30-300      # or any SF_SPEC; see top-level README.md
 ```
 
 Output: results are upserted into `results/all_results.csv` (the one canonical

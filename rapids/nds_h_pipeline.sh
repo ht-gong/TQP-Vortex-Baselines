@@ -81,3 +81,11 @@ log "DONE. Final parquet: $(du -sh "${FINAL}" | cut -f1)"
 for t in ${ALL_TABLES}; do
   printf '  %-10s %s\n' "${t}" "$(du -sh "${FINAL}/${t}" 2>/dev/null | cut -f1)" | tee -a "${LOG}"
 done
+
+# Enforce the one-generator invariant: the fresh parquet must be clean external
+# NDS-H (right writer, in-spec part.p_brand, correct row counts). Fails loudly
+# (set -e) so a corrupt/self-generated dataset can never silently feed results.
+# See results/GENERATOR.md.
+VALIDATOR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/results/validate_dataset.py"
+log "validating ${FINAL} as clean external NDS-H SF${SCALE} ..."
+python3 "${VALIDATOR}" "${FINAL}" "${SCALE}" 2>&1 | tee -a "${LOG}"
