@@ -7,14 +7,19 @@ schema, same `repartition(200)`, same parquet-mr writer defaults.
 
 | file | purpose |
 |------|---------|
-| `setup_datagen.sh` | one-time host setup: pinned `tpch-kit` clone (dbgen 2.17.3), `dbgen` built the way the NDS-H `tpch-gen` Makefile builds it, `datagen-venv/` (pyspark 3.5.8, pyarrow, duckdb) with a bundled Temurin JDK 17 |
-| `env.sh` | `source` it for the venv, JDK 17 and `spark-submit` on PATH |
-| `gen_tpch.sh <SF> <PARALLEL> <BATCH> <out>` | the pipeline: batched dbgen → Spark transcode → merge → delete raw; validates, then publishes `<out>/parquet`. `run.sh` calls this |
+| `dataset.sh <SF>` | `make data SF=…`: generate `$DATA_DIR/sf<SF>` if missing (PARALLEL = 2·SF, at least 20; BATCH 25), then validate. `run.sh` calls it too |
+| `gen_tpch.sh <SF> <PARALLEL> <BATCH> <out>` | the pipeline: batched dbgen → Spark transcode → merge → delete raw; validates, then publishes `<out>/parquet` |
 | `gen_tpch.py` | `dbgen` and `transcode` sub-commands used by `gen_tpch.sh` |
+| `env.sh` | `source` it for the Spark toolchain (`$PY`, `$JAVA_HOME`, `$SPARK_HOME` from the image) |
+| `export_pth.py <parquet> <SF> <out>` | `make pth SF=…`: the same data as TQP-Vortex `.pth` column files (below) |
+
+The toolchain is part of the image (`docker/Dockerfile`, pins in `versions.env`
+and `docker/py.lock`): dbgen from the pinned `tpch-kit` clone (2.17.3) at
+`$DBGEN_DIR`, pyspark 3.5.8 / pyarrow / duckdb in the `py` env, Temurin JDK 17.
 
 ```bash
-datagen/setup_datagen.sh                      # once
-datagen/gen_tpch.sh 100 200 25 /data/haotiang/parquet-ablation/sf100   # -> .../sf100/parquet/<table>/
+make data SF=100            # -> $DATA_DIR/sf100/parquet/<table>/
+make validate SF=100
 ```
 
 ## What the pipeline does
@@ -64,8 +69,36 @@ of the upstream pipeline itself.
 
 - tpch-kit is pinned by commit (`852ad0a` = TPC-H tools 2.17.3). The NDS-H
   `tpch-gen` Makefile assumes the official toolkit and patches `tpcd.h` by line
-  number; `setup_datagen.sh` adds the same `SPARK` profile defines by pattern.
-  They do not affect data generation.
+  number; the Dockerfile's `dbgen` stage adds the same `SPARK` profile defines by
+  pattern and builds with `MACHINE=LINUX DATABASE=SPARK WORKLOAD=TPCH`. The
+  defines do not affect data generation.
 - `env.sh` sets `SPARK_LOCAL_IP=127.0.0.1` (local-mode driver bind in
   containers) and unsets `CONTAINER_ID` (Spark would think it is under YARN).
 - `rapids/activate.sh` uses this toolchain for the RAPIDS runner.
+
+## `.pth` export for TQP-Vortex
+
+This generator's parquet is the ground truth for TQP-Vortex too. `make pth SF=…`
+runs `export_pth.py` on `$DATA_DIR/sf<SF>/parquet` and writes the files
+TQP-Vortex's own generator (`tpch-dbgen-tensors`) writes, loadable by its
+unmodified loader (`list(torch.jit.load(path).parameters())[0]`):
+`$DATA_DIR/pth/SF<SF>-tensor-<COL>.pth`, one TorchScript archive per column,
+written with torch 2.6.0 (TQP-Vortex's version), for the 54 columns TQP-Vortex
+uses (it skips L_LINENUMBER, L_COMMENT, O_CLERK, P_COMMENT, PS_COMMENT, N_COMMENT,
+R_COMMENT). Point TQP-Vortex at them with `TQP_DATA_DIR=$DATA_DIR/pth`.
+
+| parquet | `.pth` tensor |
+|---|---|
+| keys (`bigint`), `p_size`, `ps_availqty`, `o_shippriority` | `int64 [rows]` |
+| `l_quantity` `DECIMAL(11,2)` | `int64 [rows]`, the integral value |
+| other `DECIMAL(11,2)` | `float64 [rows]`, unscaled / 100 |
+| dates | `int32 [rows]`, days since 1990-01-01 |
+| `o_orderstatus`, `l_returnflag`, `l_linestatus` | `int8 [rows]`, the character code |
+| other strings | `int8 [rows, width]`, bytes then NUL padding (strncpy) |
+
+Rows are in **parquet order** (part-files in sorted name order), not key order,
+so the order is fixed for a dataset on disk but differs between two
+generations; `SF<SF>-manifest.json` records the part-file order. TQP-Vortex still
+marks each table's primary-key column as sorted, which steers its codec choice.
+The export fails on a null, an over-long string, a fractional `l_quantity`, a
+date outside 1992–1998, or a non-ASCII value.
