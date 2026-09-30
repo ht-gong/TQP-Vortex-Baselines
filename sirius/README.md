@@ -36,7 +36,7 @@ sirius/              the upstream clone (gitignored; re-create with setup_sirius
 ```
 
 Not committed (regenerate): the `sirius/` clone + its `.pixi/` build env, and the
-SF500 parquet (`/dev/shm/tpch_sf500/parquet`, staged by `rapids/nds_h_pipeline.sh`).
+parquet datasets (from `datagen/`, staged to the ramdisk by `run.sh`).
 
 ## Requirements (all satisfied on this box)
 
@@ -65,9 +65,6 @@ on this box: it stops at Hopper (sm_90) and GPU ops die with "no kernel image".
 Data must already be staged to the ramdisk (same as the other baselines):
 
 ```bash
-# one-time: regenerate SF500 parquet into /dev/shm (~180 GB) if not present
-DRIVER_MEM=120g /workspace/baseline/rapids/nds_h_pipeline.sh 500 1000 25 /dev/shm/tpch_sf500
-
 # run all 22 (or a subset) through Sirius on the GPU
 cd /workspace/baseline/sirius
 ./run_sirius.sh                 # queries 1..22

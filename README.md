@@ -12,7 +12,6 @@ runs from a single entry point, `./run.sh`.
 | `polars_gpu` | cudf-polars (GPU) | `polars/` |
 | `duckdb_cpu` | DuckDB (CPU) | `duckdb/` |
 | `sirius` | Sirius — GPU-native SQL, DuckDB extension | `sirius/` |
-| `polars_cpu` | Polars streaming (CPU) — optional | `polars/` |
 
 Default engine set: `rapids polars_gpu duckdb_cpu sirius`.
 
@@ -25,8 +24,8 @@ ENGINES="duckdb_cpu" ./run.sh 500 700
 ```
 
 `run.sh` is the one entry point. For each requested scale factor it: ensures the
-dataset exists on disk (generating it with the NDS-H pipeline if missing),
-validates it is clean external NDS-H, stages it disk → ramdisk, runs each
+dataset exists on disk (generating it with `datagen/` if missing),
+validates it, stages it disk → ramdisk, runs each
 requested engine against the ramdisk copy, then frees the ramdisk. Each engine
 folds its 22 rows into `results/all_results.csv`.
 
@@ -43,7 +42,7 @@ Default: `30 50 100 300 500 700`.
 | `SHM` | ramdisk root (default `/dev/shm`) |
 | `QUERIES` | query subset (default `1..22`) |
 | `KEEP_RAMDISK=1` | keep the staged ramdisk copy after each SF |
-| `GEN_PARALLEL` / `GEN_BATCH` | override NDS-H generation chunking |
+| `GEN_PARALLEL` / `GEN_BATCH` | override dbgen chunking for generation |
 
 `DRIVER_MEM`, `SPARK_SCRATCH`, `GPU_PART_MB`, `MIN_FREE_GB`, etc. pass through to
 the individual runners.
@@ -52,7 +51,7 @@ the individual runners.
 
 All engines must read byte-identical parquet, and it must come from the repo's
 **NDS-H-equivalent** generator in `datagen/` (TPC-H dbgen → Spark transcode,
-writer `parquet-mr`; a verified re-implementation of NVIDIA's NDS-H pipeline).
+writer `parquet-mr`; a re-implementation of NVIDIA's NDS-H pipeline).
 Never point a runner at self-written parquet (DuckDB's own `CALL dbgen` export,
 cudf exports); it is not comparable to the external standard. Generate a dataset with:
 
@@ -69,17 +68,18 @@ Full rules and rationale: **`results/GENERATOR.md`**.
 
 ```
 run.sh         single entry point (stage -> run engines -> free, per SF)
-rapids/        Spark-RAPIDS runner + NDS-H generate/transcode pipeline
-polars/        Polars CPU/GPU runners + native TPC-H q1-22
+datagen/       the one TPC-H generator (dbgen -> Spark -> parquet)
+rapids/        Spark-RAPIDS runner
+polars/        Polars GPU runner + native TPC-H q1-22
 sirius/        Sirius runner + gpu_execution config + setup
 duckdb/        DuckDB CPU runner
+ablation/      parquet-format profiling pass (per-engine, per-column format map)
 results/       all_results.csv, query stream (queries/), validator, GENERATOR.md
-docker/        self-contained image: engines + NDS-H generator (see docker/README.md)
+versions.env   every toolchain pin; docker/*.lock hold the Python env locks
 ```
 
 Not committed (regenerate / re-download): the parquet datasets, python venvs, the
-RAPIDS jar, conda envs, and the upstream generator clones. See `docker/README.md`
-to rebuild reproducibly.
+RAPIDS jar, and the upstream generator clones.
 
 ## Results — `results/all_results.csv`
 
@@ -91,7 +91,7 @@ this file. Do **not** add parallel summary CSVs; pivot this instead.
 
 | column | type | values / meaning |
 |--------|------|------------------|
-| `engine` | string | `rapids` · `polars_gpu` · `duckdb_cpu` · `sirius` · `polars_cpu` |
+| `engine` | string | `rapids` · `polars_gpu` · `duckdb_cpu` · `sirius` (legacy: `polars_cpu`, the retired Polars CPU engine, SF500 rows only) |
 | `scale_factor` | int | TPC-H scale factor (≈ GB of raw data) |
 | `query` | string | `query1` … `query22` |
 | `status` | string | `OK` · `FAIL` (engine error; GPU out-of-memory shows here with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` (disk-watchdog kill) · `TIMEOUT` (per-query timeout) |
@@ -117,5 +117,7 @@ duckdb -c "PIVOT 'results/all_results.csv'
   ON engine||'_sf'||scale_factor USING first(seconds) GROUP BY query"
 ```
 
-A separate parquet-format ablation (encoding x codec x row order, SF100,
-same rows) lives in `results/FORMAT_ABLATION.md`.
+A separate parquet-format study lives in `ablation/format_profile.py`: per engine
+and column, the fastest of the requested encodings × codecs, measured with one
+scan+decode probe per column (no TPC-H). The earlier 22-query SF100 ablation and
+its data are in `results/FORMAT_ABLATION.md`.

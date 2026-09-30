@@ -24,6 +24,7 @@ MIN_FREE_GB="${MIN_FREE_GB:-30}"     # kill a query if free disk drops below thi
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-0}"  # kill a query after this many seconds (0 = never); row -> TIMEOUT
 
 source "${RAPIDS_DIR}/activate.sh" >/dev/null 2>&1
+rapids_run_args "${SCRATCH}"
 mkdir -p "${SCRATCH}"
 rm -f "${OUT_CSV}"; : > "${LOG}"
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
@@ -37,20 +38,7 @@ for q in ${QUERIES}; do
   rm -rf "${SCRATCH:?}"/* 2>/dev/null
   qlog="${ROOT}/results/q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
-  env -u CONTAINER_ID spark-submit \
-    --master "local[*]" --driver-memory "${DRIVER_MEM}" \
-    --jars "${RAPIDS_JAR}" \
-    --conf spark.local.dir="${SCRATCH}" \
-    --conf spark.plugins=com.nvidia.spark.SQLPlugin \
-    --conf spark.rapids.sql.enabled=true \
-    --conf spark.rapids.sql.concurrentGpuTasks=2 \
-    --conf spark.rapids.memory.pinnedPool.size=8G \
-    --conf spark.rapids.memory.host.spillStorageSize=200G \
-    --conf spark.shuffle.manager=com.nvidia.spark.rapids.spark358.RapidsShuffleManager \
-    --conf spark.rapids.shuffle.mode=MULTITHREADED \
-    --conf spark.sql.files.maxPartitionBytes=1g \
-    --conf spark.sql.shuffle.partitions=1024 \
-    --conf spark.sql.adaptive.enabled=true \
+  env -u CONTAINER_ID spark-submit "${RAPIDS_RUN_ARGS[@]}" \
     "${RAPIDS_DIR}/run_tpch_queries.py" "${RAM_PQ}" "${STREAM}" "${OUT_CSV}" "${q}" append \
     >"${qlog}" 2>&1 &
   pid=$!

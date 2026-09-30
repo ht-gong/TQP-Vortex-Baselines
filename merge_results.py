@@ -11,6 +11,8 @@ so no per-run/per-SF CSVs are kept around. Idempotent; atomic write.
 """
 import csv, os, sys
 
+# polars_cpu is retired, but its SF500 rows are still in all_results.csv; keep
+# it first so merging other engines does not re-sort (and so rewrite) them.
 ENGINE_ORDER = ["polars_cpu", "duckdb_cpu", "sirius", "polars_gpu", "rapids"]
 FIELDS = ["engine", "scale_factor", "query", "status", "seconds", "rows_or_error"]
 

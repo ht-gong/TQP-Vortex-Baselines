@@ -1,14 +1,13 @@
 #!/usr/bin/env python
-"""Run native-Polars TPC-H queries 1-22 on the SF500 parquet (from ramdisk).
+"""Run native-Polars TPC-H queries 1-22 on the GPU (cudf-polars) over a parquet
+dataset (normally the ramdisk copy).
 
-Mirrors the RAPIDS run: per-query wall time excludes engine startup (Polars has
-no JVM/GPU startup; a warm-up query absorbs any first-touch/JIT cost), the
-dataset is read from /dev/shm, and results are written incrementally to a CSV so
-a watchdog kill never loses prior rows.
+Mirrors the RAPIDS run: per-query wall time excludes engine startup (a warm-up
+query absorbs GPU init / first-touch cost), and results are written
+incrementally to a CSV so a watchdog kill never loses prior rows.
 
-  run_tpch_polars.py <input_dir> <out_csv> [SUBSET] [append] [engine]
+  run_tpch_polars.py <input_dir> <out_csv> [SUBSET] [append]
     SUBSET  comma-separated query numbers, e.g. "9" or "1,2,3"  (default: 1..22)
-    engine  "streaming" (default, spills to disk) or "in-memory"
 """
 import os
 import sys
@@ -18,19 +17,10 @@ import polars as pl
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tpch_queries import QUERIES
 
-INPUT = sys.argv[1]
-OUT_CSV = sys.argv[2]
-SUBSET = [int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3 and sys.argv[3] else list(range(1, 23))
-APPEND = len(sys.argv) > 4 and sys.argv[4] == "append"
-ENGINE = sys.argv[5] if len(sys.argv) > 5 else "streaming"
-
 
 def build_engine():
-    """For CPU return the engine string; for GPU build a GPUEngine that spills
-    device->host (so SF500 fits one 32 GB GPU) using managed memory + the
-    streaming executor with modest partitions."""
-    if ENGINE != "gpu":
-        return ENGINE
+    """GPUEngine with the streaming executor and modest partitions, spilling
+    device->host (so SF500 fits one 32 GB GPU)."""
     part_mb = int(os.environ.get("GPU_PART_MB", "256"))
     mode = os.environ.get("GPU_MR", "async")  # "async" (rapidsmpf spill) or "managed" (UVM)
     kw = dict(
@@ -58,8 +48,8 @@ DECIMAL_COLS = {"l_quantity", "l_extendedprice", "l_discount", "l_tax",
                 "s_acctbal", "p_retailprice"}
 
 
-def scan(table):
-    lf = pl.scan_parquet(f"{INPUT}/{table}/*.parquet")
+def scan(input_dir, table):
+    lf = pl.scan_parquet(f"{input_dir}/{table}/*.parquet")
     cols = lf.collect_schema().names()
     exprs = []
     for c in cols:
@@ -70,9 +60,14 @@ def scan(table):
 
 
 def main():
-    print(f"Polars {pl.__version__} | engine={ENGINE} | threads={pl.thread_pool_size()}")
+    INPUT = sys.argv[1]
+    OUT_CSV = sys.argv[2]
+    SUBSET = [int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3 and sys.argv[3] else list(range(1, 23))
+    APPEND = len(sys.argv) > 4 and sys.argv[4] == "append"
+
+    print(f"Polars {pl.__version__} | engine=gpu | threads={pl.thread_pool_size()}")
     engine = build_engine()
-    lf = {t: scan(t) for t in TABLES}
+    lf = {t: scan(INPUT, t) for t in TABLES}
 
     # Warm-up: touch lineitem so first-read/JIT is not charged to any query.
     t0 = time.time()

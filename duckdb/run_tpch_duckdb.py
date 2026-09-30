@@ -78,6 +78,22 @@ def load_dataset(con, parquet, mode, with_pk):
             print(f"  pk {t:9s} {time.time() - t0:7.1f}s", flush=True)
 
 
+def connect():
+    """In-memory connection with the benchmark settings; returns (con, threads)."""
+    con = duckdb.connect()
+    # honour cgroup/taskset affinity -- os.cpu_count() reports the whole box and
+    # would oversubscribe when the container is pinned to a subset.
+    default_threads = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    threads = int(os.environ.get("DUCKDB_THREADS", default_threads))
+    con.execute(f"PRAGMA threads={threads}")
+    mem = os.environ.get("DUCKDB_MEMORY_LIMIT")
+    if mem:
+        con.execute(f"PRAGMA memory_limit='{mem}'")
+    if os.environ.get("DUCKDB_TEMP_DIR"):
+        con.execute(f"PRAGMA temp_directory='{os.environ['DUCKDB_TEMP_DIR']}'")
+    return con, threads
+
+
 def run_query(con, stmts):
     # return final select row count
     rows = 0
@@ -104,18 +120,7 @@ def main():
     mode = os.environ.get("DUCKDB_LOAD_MODE", "tables")
     with_pk = os.environ.get("DUCKDB_PK", "0") == "1"
 
-    # connect to duckdb
-    con = duckdb.connect()
-    # honour cgroup/taskset affinity -- os.cpu_count() reports the whole box and
-    # would oversubscribe when the container is pinned to a subset.
-    default_threads = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-    threads = int(os.environ.get("DUCKDB_THREADS", default_threads))
-    con.execute(f"PRAGMA threads={threads}")
-    mem = os.environ.get("DUCKDB_MEMORY_LIMIT")
-    if mem:
-        con.execute(f"PRAGMA memory_limit='{mem}'")
-    if os.environ.get("DUCKDB_TEMP_DIR"):
-        con.execute(f"PRAGMA temp_directory='{os.environ['DUCKDB_TEMP_DIR']}'")
+    con, threads = connect()
 
     print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} mode={mode} "
           f"pk={with_pk} runs={runs} warmups={warmups}", flush=True)

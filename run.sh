@@ -3,10 +3,10 @@
 # run.sh — the single entry point for the TPC-H engine comparison.
 #
 # For each requested scale factor: ensure the dataset exists on disk (generate
-# with the NDS-H pipeline if missing), validate it is clean external NDS-H, stage
-# it disk -> ramdisk, run each requested engine against the ramdisk copy, then
-# free the ramdisk before the next scale factor. Each engine self-merges its 22
-# rows into results/all_results.csv.
+# it with datagen/gen_tpch.sh if missing), validate it, stage it disk ->
+# ramdisk, run each requested engine against the ramdisk copy, then free the
+# ramdisk before the next scale factor. Each engine self-merges its 22 rows into
+# results/all_results.csv.
 #
 #   ./run.sh [SF_SPEC ...]
 #
@@ -17,13 +17,12 @@
 # Env:
 #   ENGINES   space-separated engines, in run order.
 #             Default: "rapids polars_gpu duckdb_cpu sirius"
-#             Also available: polars_cpu.
 #   DATA_DIR  where datasets live on disk, as $DATA_DIR/sf<SF>/parquet/<table>/.
 #             Default: /data/haotiang/parquet-ablation (NVMe). Missing datasets are generated here.
 #   SHM       ramdisk root (default /dev/shm).
 #   QUERIES   query subset (default "1 2 ... 22").
 #   KEEP_RAMDISK=1   keep the staged ramdisk copy after a scale factor (default: delete).
-#   GEN_PARALLEL / GEN_BATCH   override NDS-H generation chunking.
+#   GEN_PARALLEL / GEN_BATCH   override dbgen chunking for generation.
 #   DRIVER_MEM, SPARK_SCRATCH, GPU_PART_MB, MIN_FREE_GB ... passed through to runners.
 #
 # Examples:
@@ -40,8 +39,7 @@ ENGINES="${ENGINES:-rapids polars_gpu duckdb_cpu sirius}"
 QUERIES="${QUERIES:-$(seq 1 22)}"
 CANON_SFS="30 50 100 300 500 700"
 
-# In-repo generator (datagen/); verified equivalent to the upstream NDS-H
-# pipeline it replaced (rapids/nds_h_pipeline.sh, kept as the reference).
+# The one generator every engine's data comes from (datagen/README.md).
 PIPELINE="${PIPELINE:-${REPO}/datagen/gen_tpch.sh}"
 VALIDATOR="${REPO}/results/validate_dataset.py"
 # validate_dataset.py needs pyarrow: prefer the datagen venv (datagen/setup_datagen.sh).
@@ -94,15 +92,14 @@ run_engine(){   # $1=engine  $2=ramdisk_parquet  $3=SF
   case "${e}" in
     rapids)     TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${REPO}/rapids/run_tpch_safe.sh"  "${QUERIES}" ;;
     polars_gpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${REPO}/polars/run_polars_gpu.sh" "${QUERIES}" ;;
-    polars_cpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${REPO}/polars/run_polars.sh"     "${QUERIES}" ;;
     duckdb_cpu) TPCH_PARQUET="${pq}" TPCH_SF="${sf}" bash "${REPO}/duckdb/run_duckdb.sh"      "${QUERIES}" ;;
     sirius)     SIRIUS_PARQUET="${pq}" TPCH_SF="${sf}" bash "${REPO}/sirius/run_sirius.sh"    "${QUERIES}" ;;
     *) log "    unknown engine '${e}'"; return 1 ;;
   esac
 }
 
-# Ensure $DATA_DIR/sf<SF>/parquet exists and is clean external NDS-H; generate it
-# if missing. Echoes the parquet dir on success, empty on failure.
+# Ensure $DATA_DIR/sf<SF>/parquet exists and validates; generate it if missing.
+# Echoes the parquet dir on success, empty on failure.
 ensure_dataset(){
   local sf="$1"   # (a single `local` line would expand ${sf} before assigning it)
   local out="${DATA_DIR}/sf${sf}" pq="${DATA_DIR}/sf${sf}/parquet"
@@ -116,7 +113,7 @@ ensure_dataset(){
     fi
   fi
   if ! "${PY}" "${VALIDATOR}" "${pq}" "${sf}" >>"${LOG}" 2>&1; then
-    log "    !! SF${sf} dataset failed validation (not clean external NDS-H — see results/GENERATOR.md)"; return 1
+    log "    !! SF${sf} dataset failed validation (see results/GENERATOR.md)"; return 1
   fi
   echo "${pq}"
 }

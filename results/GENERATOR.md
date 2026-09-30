@@ -17,13 +17,10 @@ re-implementation of the NDS-H (NVIDIA `spark-rapids-benchmarks`) pipeline:
    schema and writes snappy parquet (writer `parquet-mr 1.13.1`), one 17-column
    table per dir with a trailing `ignore` column absorbing dbgen's dangling `|`.
 
-Driver: `datagen/gen_tpch.sh <SF> <PARALLEL> <BATCH> <out>`. It was verified to
-produce the same dataset as the upstream pipeline it replaces
-(`rapids/nds_h_pipeline.sh`, kept as the reference): identical rows, schema and
-parquet physical layout, and indistinguishable to every engine — protocol and
-tooling in `datagen/README.md`. The image-internal `docker*/scripts/gen_data.sh`
-still drive the upstream scripts directly. Output layout — the layout every
-runner reads:
+Driver: `datagen/gen_tpch.sh <SF> <PARALLEL> <BATCH> <out>`. It was checked
+against the upstream NDS-H pipeline it replaces (same rows, schema and parquet
+layout; provenance note in `datagen/README.md`). Output layout — the layout
+every runner reads:
 
 ```
 <out>/parquet/<table>/part-NNNNN-<uuid>-c000.snappy.parquet
@@ -91,11 +88,9 @@ dataset you did not just generate.
 ## Regenerating SF30/50/100/300 to restore them
 
 ```bash
-# clean NDS-H parquet for a scale factor (PARALLEL≈2·SF, BATCH≈PARALLEL/5)
-datagen/gen_tpch.sh 300 600 120 /root/tpc-h/sf300_ndsh
-python3 results/validate_dataset.py /root/tpc-h/sf300_ndsh/parquet 300   # must print VALID
-
-# then re-run every engine at that SF (each self-merges into all_results.csv)
-TPCH_SF=300 TPCH_PARQUET=/root/tpc-h/sf300_ndsh/parquet ./duckdb/run_duckdb.sh
-# ... sirius / polars_cpu / polars_gpu / rapids likewise (GPU engines: int32 caps ≈ SF300)
+# generate + validate (PARALLEL≈2·SF, BATCH 25), then run every engine at that SF;
+# each engine self-merges into all_results.csv
+./run.sh 300            # generates $DATA_DIR/sf300 if missing, validates, runs
 ```
+
+(GPU engines: int32 caps ≈ SF300.)

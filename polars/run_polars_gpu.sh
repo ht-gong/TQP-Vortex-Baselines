@@ -1,8 +1,8 @@
 #!/bin/bash
-# Run native-Polars TPC-H queries 1-22 on the ramdisk SF500 dataset on the GPU
+# Run native-Polars TPC-H queries 1-22 on the ramdisk dataset on the GPU
 # (cudf-polars / RAPIDS), one python process per query so each gets a clean GPU
-# context. Single RTX 5090; streaming executor spills device->host via rapidsmpf
-# (async pool) so SF500 fits 32 GB. Per-query time excludes startup (warm-up).
+# context. The streaming executor spills device->host via rapidsmpf (async
+# pool). Per-query time excludes startup (warm-up).
 #
 #   run_polars_gpu.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
 set -uo pipefail
@@ -20,14 +20,8 @@ LOG="${ROOT}/results/polars_gpu_run.log"
 MIN_FREE_GB="${MIN_FREE_GB:-30}"
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-0}"  # kill a query after this many seconds (0 = never); row -> TIMEOUT
 
-source "${DIR}/.venv-gpu/bin/activate"
+source "${DIR}/env.sh"
 export POLARS_TEMP_DIR="${SCRATCH}"
-export GPU_MR="${GPU_MR:-async}"
-# kvikio POSIX/compat mode: cuFile/GDS and io_uring are unavailable in this
-# container; without it the parquet reader aborts in CUFileThreadPoolWorker.
-export KVIKIO_COMPAT_MODE="${KVIKIO_COMPAT_MODE:-ON}"
-export GPU_PART_MB="${GPU_PART_MB:-128}"
-export RAPIDSMPF_SPILL_DEVICE_LIMIT="${RAPIDSMPF_SPILL_DEVICE_LIMIT:-$((22*1024*1024*1024))}"
 mkdir -p "${SCRATCH}"
 rm -f "${OUT_CSV}"; : > "${LOG}"
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
@@ -40,7 +34,7 @@ for q in ${QUERIES}; do
   rm -rf "${SCRATCH:?}"/* 2>/dev/null
   qlog="${ROOT}/results/polars_gpu_q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
-  python "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append gpu \
+  python "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append \
     >"${qlog}" 2>&1 &
   pid=$!
   killed=0; timedout=0; tstart=$(date +%s)

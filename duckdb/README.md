@@ -1,7 +1,7 @@
 # DuckDB CPU Baseline
 
 `duckdb_cpu` — DuckDB as the CPU reference point against the GPU engines
-(Sirius, Polars-GPU, Spark-RAPIDS) and Polars-CPU. Same TPC-H parquet dataset,
+(Sirius, Polars-GPU, Spark-RAPIDS). Same TPC-H parquet dataset,
 same `results/queries/stream_qualification.sql`, same results contract as every
 other engine in this repo (see `AGENTS.md`).
 
@@ -42,10 +42,10 @@ Mirrors the local `test.py` flow this baseline came from.
   median of the measured runs.
 
 ⚠️ **These seconds are WARM.** The `seconds` contract in `AGENTS.md` is cold, and
-that is how `polars_cpu` / `sirius` / `polars_gpu` / `rapids` rows were produced.
+that is how the `sirius` / `polars_gpu` / `rapids` rows were produced.
 `duckdb_cpu` numbers are therefore a lower bound relative to the other engines in
-the same table — do not read a `duckdb_cpu` vs `polars_cpu` gap as pure engine
-speed. `RUNS=1 WARMUPS=0` produces cold, directly comparable numbers.
+the same table — do not read a gap to another engine as pure engine speed.
+`RUNS=1 WARMUPS=0` produces cold, directly comparable numbers.
 
 Other env knobs: `DUCKDB_THREADS` (defaults to the process CPU affinity, not the
 whole box), `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIR` (spill location), `STREAM`.
@@ -61,7 +61,5 @@ duckdb_cpu,500,query1,OK,10.226,4
 
 ## Getting parquet
 
-```bash
-./rapids/nds_h_pipeline.sh 1 2 1 /dev/shm/tpch_sf1     # generate SF1 to ramdisk
-./duckdb/make_parquet.sh 100                            # from existing DPFProto tbl data
-```
+Only from the repo's generator (`datagen/`, see `results/GENERATOR.md`);
+`run.sh` generates and validates missing datasets.

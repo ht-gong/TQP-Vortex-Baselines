@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
 """In-repo TPC-H data generator: dbgen -> pipe-delimited text -> parquet.
 
-A self-contained re-implementation of the two NDS-H scripts the reference
-pipeline (rapids/nds_h_pipeline.sh) calls from NVIDIA/spark-rapids-benchmarks:
-`nds_h_gen_data.py` (local mode) and `nds_h_transcode.py` + `nds_h_schema.py`.
-It produces the same data the same way -- same dbgen invocation, same Spark
-CSV read with the same explicit schema, same `repartition(200)` and the same
-parquet-mr writer defaults -- so datasets from the two are interchangeable
-(datagen/verify_equivalence.py proves it). Driven by datagen/gen_tpch.sh.
+A self-contained re-implementation of the NDS-H generate + transcode scripts
+from NVIDIA/spark-rapids-benchmarks (`nds_h_gen_data.py` local mode,
+`nds_h_transcode.py` + `nds_h_schema.py`): same dbgen invocation, same Spark CSV
+read with the same explicit schema, same `repartition(200)` and the same
+parquet-mr writer defaults (provenance: datagen/README.md). Driven by
+datagen/gen_tpch.sh.
 
   gen_tpch.py dbgen     --scale SF --parallel N --range A,B --out RAW_DIR
                         [--dbgen-dir DIR]
       Runs dbgen chunks A..B of N concurrently (`dbgen -s SF -C N -S i -v Y -f Y`,
       exactly the upstream command) and moves the output into RAW_DIR/<table>/.
-      nation/region exist only when chunk 1 is in the range.
+      Every chunk also writes the fixed-size nation/region tables (identical
+      content); gen_tpch.sh transcodes them only from the batch holding chunk 1.
 
   spark-submit gen_tpch.py transcode --input RAW_DIR --output PQ_DIR
                         [--tables t1,t2,...] [--log-level WARN]
                         [--compression snappy|zstd|lz4raw] [--dictionary true|false]
-                        [--writer-version v1|v2] [--layout shuffle|keyorder]
+                        [--writer-version v1|v2]
       For each table: read RAW_DIR/<table> as '|'-delimited CSV with the fixed
       schema below (17 columns for lineitem etc.: dbgen's trailing '|' yields a
       final all-null `ignore` column), repartition(200), write snappy parquet to
@@ -26,17 +26,14 @@ parquet-mr writer defaults -- so datasets from the two are interchangeable
 
       The defaults reproduce the NDS-H reference format exactly (snappy,
       dictionary encoding with PLAIN fallback, v1 pages, round-robin shuffle).
-      The four format knobs exist for the parquet-format ablation
-      (results/FORMAT_ABLATION.md); they only change how the same rows are laid
-      out and encoded, never the rows themselves:
+      The three format knobs exist for the format profiling pass
+      (ablation/format_profile.py); they only change how the same rows are
+      encoded, never the rows or their order:
         --compression   parquet codec: snappy (default) | zstd | lz4raw (LZ4_RAW)
         --dictionary    false -> no dictionary pages: PLAIN (v1) or the v2
                         fallbacks DELTA_BINARY_PACKED (ints/decimals/dates) and
                         DELTA_BYTE_ARRAY (strings)
         --writer-version v1 (default) | v2 (data page v2 + delta encodings)
-        --layout        shuffle (default, repartition(200) round-robin, rows out
-                        of key order) | keyorder (200 range partitions sorted by
-                        the table's primary key = dbgen input order)
 """
 import argparse
 import os
@@ -46,14 +43,7 @@ import sys
 
 TABLES = ["customer", "lineitem", "nation", "orders",
           "part", "partsupp", "region", "supplier"]
-UNSCALED = {"nation", "region"}   # fixed size; dbgen emits them only in step 1
-# TPC-H primary keys = the order dbgen emits rows in (used by --layout keyorder).
-PRIMARY_KEYS = {
-    "part": ["p_partkey"], "supplier": ["s_suppkey"],
-    "partsupp": ["ps_partkey", "ps_suppkey"], "customer": ["c_custkey"],
-    "orders": ["o_orderkey"], "lineitem": ["l_orderkey", "l_linenumber"],
-    "nation": ["n_nationkey"], "region": ["r_regionkey"],
-}
+UNSCALED = {"nation", "region"}   # fixed size, one unchunked file (every chunk writes it)
 
 
 # ----------------------------------------------------------------- dbgen
@@ -71,10 +61,10 @@ def cmd_dbgen(args):
     # One dbgen process per chunk, all at once, run in the dbgen dir (dists.dss
     # is found relative to cwd) with DSS_PATH pointing at a staging dir under
     # RAW_DIR, so the text lands on RAW_DIR's filesystem directly instead of
-    # in the repo checkout (upstream writes into its dbgen dir and moves the
-    # files afterwards; a 25-chunk SF100 batch is ~13 GB, more than the root
-    # disk here has). Same dbgen flags as nds_h_gen_data.py; DSS_PATH is
-    # dbgen's own output-directory override and does not affect the data.
+    # in the dbgen dir (upstream writes there and moves the files afterwards;
+    # a 25-chunk SF100 batch is ~13 GB). Same dbgen flags as nds_h_gen_data.py;
+    # DSS_PATH is dbgen's own output-directory override and does not affect
+    # the data. stderr is kept (it lands in the pipeline log).
     stage = os.path.join(out, "_dbgen_out")
     os.makedirs(stage, exist_ok=True)
     env = dict(os.environ, DSS_PATH=stage)
@@ -83,7 +73,7 @@ def cmd_dbgen(args):
         procs.append(subprocess.Popen(
             ["./dbgen", "-s", str(args.scale), "-C", str(args.parallel),
              "-S", str(i), "-v", "Y", "-f", "Y"],
-            cwd=dbgen_dir, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            cwd=dbgen_dir, env=env, stdout=subprocess.DEVNULL))
     failed = [p.returncode for p in procs if p.wait() != 0]
     if failed:
         sys.exit(f"dbgen failed (return codes {failed})")
@@ -95,8 +85,9 @@ def cmd_dbgen(args):
                  else [f"{t}.tbl.{i}" for i in range(start, end + 1)])
         for n in names:
             src = os.path.join(stage, n)
-            if os.path.exists(src):          # nation/region only exist for chunk 1
-                os.rename(src, os.path.join(tdir, n))
+            if not os.path.exists(src):
+                sys.exit(f"dbgen produced no {n} in {stage}")
+            os.rename(src, os.path.join(tdir, n))
     os.rmdir(stage)
     print(f"dbgen: SF{args.scale} chunks {start}-{end}/{args.parallel} -> {out}")
 
@@ -160,13 +151,7 @@ def cmd_transcode(args):
               .csv(f"{args.input}/{t}", schema=all_schemas[t]))
         # Same physical layout as upstream: 200 round-robin partitions per table
         # per batch, written with Spark's parquet defaults (snappy, parquet-mr).
-        # --layout keyorder keeps 200 files per table per batch but range-
-        # partitions + sorts on the primary key instead (rows in dbgen order).
-        if args.layout == "keyorder":
-            keys = PRIMARY_KEYS[t]
-            df = df.repartitionByRange(200, *keys).sortWithinPartitions(*keys)
-        else:
-            df = df.repartition(200)
+        df = df.repartition(200)
         # Format knobs. `compression` is Spark's own option; the `parquet.*`
         # options are copied verbatim into the Hadoop conf the parquet-mr
         # writer reads (Spark's newHadoopConfWithOptions), so dictionary and
@@ -178,7 +163,7 @@ def cmd_transcode(args):
            .option("parquet.writer.version", args.writer_version)
            .save(f"{args.output}/{t}"))
         print(f"transcode: {t} -> {args.output}/{t}  "
-              f"[{args.layout} {args.compression} dict={args.dictionary} {args.writer_version}]")
+              f"[{args.compression} dict={args.dictionary} {args.writer_version}]")
     spark.stop()
 
 
@@ -205,7 +190,6 @@ def main():
     tr.add_argument("--compression", default="snappy", choices=["snappy", "zstd", "lz4raw"])
     tr.add_argument("--dictionary", default="true", type=lambda v: v.lower() in ("1", "true", "yes"))
     tr.add_argument("--writer-version", default="v1", choices=["v1", "v2"])
-    tr.add_argument("--layout", default="shuffle", choices=["shuffle", "keyorder"])
     tr.set_defaults(fn=cmd_transcode)
 
     args = p.parse_args()

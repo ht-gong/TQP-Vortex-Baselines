@@ -1,15 +1,8 @@
-# merged image data
-docker-all/data/
-
 # pulled repo
 dpfproto/data
 dpfproto/logs/
 
 .venv/
-
-# ---- large generated data (regenerate via the gen pipelines) ----
-results/parquet/
-duckdb/results
 
 # ---- benchmark intermediates: results/all_results.csv is the ONLY kept results
 # file; every per-run / per-SF / detail CSV is a throwaway (runners merge into
@@ -21,12 +14,9 @@ results/*_logs/
 **/_tmp_pq/
 **/_work/
 _spark_scratch/
-_polars_scratch/
 _polars_scratch_gpu/
-docker/data/
 
 # ---- python venvs & caches ----
-polars/.venv/
 polars/.venv-gpu
 **/__pycache__/
 *.pyc
@@ -40,8 +30,6 @@ rapids/env/
 /datagen/dbgen/
 
 # ---- upstream clones (re-cloneable; pinned in datagen/setup_datagen.sh) ----
-/lancelot/
-/spark-rapids-benchmarks/
 /tpch-kit/
 # the sirius clone + its .pixi build env (setup_sirius.sh recreates it)
 /sirius/sirius
@@ -53,10 +41,11 @@ _sirius_spill/
 *.log
 *.out
 
-# symlinks onto the NVMe (see AGENTS.md) and the format-ablation per-run logs
+# symlink onto the NVMe (see AGENTS.md), the old format-ablation per-run logs,
+# and the format profiling pass's per-worker logs
 _polars_scratch_gpu
-/spark-rapids-benchmarks
 results/format_ablation/
+results/format_profile_logs/
 
 # ---- local planning notes (not committed) ----
 /docs/docker_migration_plan.md
