@@ -1,43 +1,34 @@
 # spark-rapids (RAPIDS Accelerator for Apache Spark)
 
-GPU-accelerated Apache Spark via the [NVIDIA RAPIDS Accelerator](https://github.com/NVIDIA/spark-rapids),
-set up as a self-contained conda environment (no Docker, no system-wide installs).
+The `rapids` engine: Spark 3.5.8 (local mode, one GPU) with the
+[NVIDIA RAPIDS Accelerator](https://github.com/NVIDIA/spark-rapids). Its
+environment is part of the image (`docker/Dockerfile`, pins in `versions.env`):
+the RAPIDS jar at `$RAPIDS_JAR`, Spark from the `py` env (`$SPARK_HOME`), and a
+Temurin 17 JDK (`$JAVA_HOME`).
 
 ## What's here
 
-| Path | Purpose |
+| path | purpose |
 |------|---------|
-| `env/` | Conda env — Python 3.11, **OpenJDK 17**, **pyspark 3.5.8** |
-| `jars/rapids-4-spark_2.12-26.04.2-cuda12.jar` | The RAPIDS Accelerator plugin (Scala 2.12, CUDA 12 build, SHA1-verified) |
-| `conf/spark-rapids.conf` | Local-mode Spark properties enabling the GPU plugin |
-| `activate.sh` | `source` it to get a ready shell + `rapids-submit` helper |
-| `test_gpu.py` | Smoke test that proves a query runs on the GPU |
+| `run_tpch_safe.sh` | the runner: one `spark-submit` per query, a disk watchdog and an optional per-query timeout; merges into `results/all_results.csv` |
+| `run_tpch_queries.py` | runs the qgen stream's queries in one Spark session; per-query wall time and GPU-operator count |
+| `activate.sh` | `source` it for the Spark toolchain, `$RAPIDS_JAR`/`$RAPIDS_CONF`, a `rapids-submit` helper and `rapids_run_args` (the benchmark's spark-submit flags, shared with `ablation/probe.sh`) |
+| `conf/spark-rapids.conf` | defaults for interactive `rapids-submit` use |
+| `test_gpu.py` | smoke test that proves a query runs on the GPU |
 
 ## Versions / hardware
 
-- **spark-rapids 26.04.2** (latest), Scala 2.12 → pairs with **Spark 3.3.x–3.5.x** (using 3.5.8).
-- **cuda12** classifier: the jar bundles its own cuDF native library (incl. `sm_120` kernels), so
-  it needs only an NVIDIA driver — runs on this box's CUDA 13 driver via backward compatibility.
-- Verified on **2× RTX 5090** (Blackwell, compute capability 12.0), driver 580.82.09.
+- **spark-rapids 26.04.2**, Scala 2.12 → Spark 3.3.x–3.5.x (3.5.8 here).
+- **cuda12** classifier: the jar bundles its own cuDF native library (sm_70
+  through sm_120), so it needs only an NVIDIA driver; it runs on the H100s' CUDA
+  13 driver through backward compatibility.
 
 ## Usage
 
 ```bash
-source /workspace/baseline/rapids/activate.sh   # activates env, sets JAVA_HOME/SPARK_HOME/RAPIDS_JAR
-
-# Run a job with the GPU plugin pre-wired (local[*] + jar + conf):
-rapids-submit your_job.py
-
-# Or the smoke test:
-rapids-submit test_gpu.py
-```
-
-In your own `SparkSession` the three settings that matter are:
-
-```python
-.config("spark.jars", os.environ["RAPIDS_JAR"])
-.config("spark.plugins", "com.nvidia.spark.SQLPlugin")
-.config("spark.rapids.sql.enabled", "true")
+make bench SF=100 ENGINES=rapids        # TPC-H q1-22 -> results/all_results.csv
+make shell                              # then, inside the container:
+source rapids/activate.sh && rapids-submit rapids/test_gpu.py
 ```
 
 Confirm GPU execution with `df.explain()` — operators should be prefixed `Gpu*`
@@ -46,12 +37,13 @@ operator falls back to CPU.
 
 ## Notes / gotchas
 
-- **Vast `CONTAINER_ID`:** Spark otherwise thinks it's in a YARN container and dies with
-  "Yarn Local dirs can't be empty". `activate.sh`'s `rapids-submit` runs Spark with
-  `env -u CONTAINER_ID`; `test_gpu.py` pops it from `os.environ`. Do the same in your own jobs.
-- **Persistence:** this lives under `/workspace`, which only survives recycle/destroy if the
-  instance has a host volume (`vast-capabilities | jq '.instance.workspace_is_volume'`).
-  The env + jar are reproducible from this README if not.
-- **Upgrading the jar:** newer versions are at
-  `https://repo1.maven.org/maven2/com/nvidia/rapids-4-spark_2.12/` — keep the Scala 2.12 /
-  Spark-version pairing in mind, and a `-cuda13` classifier jar is also published if preferred.
+- `CONTAINER_ID` in the environment makes Spark think it is in a YARN container
+  ("Yarn Local dirs can't be empty"); the runner and `rapids-submit` use
+  `env -u CONTAINER_ID`, `test_gpu.py` pops it.
+- Spark's local dirs go to `$SCRATCH/rapids` and are emptied between queries.
+- Each query's JVM fetches the 880 MB jar into its local dir at start-up. On a
+  heavily loaded box (load ~100, two Spark apps starting at once) this once took
+  over 15 s, a heartbeat arrived before the executor's BlockManager registered,
+  and that query failed with `BlockManagerId ... is null`; a rerun passed.
+- spark-rapids 26.04.2 hangs on some reads of delta-encoded + zstd parquet
+  (cuDF decoder); the format profiling pass times those probes out.

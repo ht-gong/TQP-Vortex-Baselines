@@ -1,9 +1,11 @@
 # polars env lock: cudf-polars (polars_gpu), CUDA 13 wheels. Installed with --require-hashes --no-deps
-# and --extra-index-url https://pypi.nvidia.com. Pinned from the host env the SF500/SF100 results used.
+# and --extra-index-url https://pypi.nvidia.com. Pinned from the host env the SF500/SF100 results used,
+# plus nvidia-nvjitlink-cu12==12.9.86: libcudf loads libnvJitLink at import, and the host env got it
+# from the system CUDA 12.9 install (/usr/local/cuda-12.9, 12.9.86), outside the venv.
 # Regenerate (only as part of a deliberate version bump):
 #   uv pip compile --python-version 3.12 --python-platform x86_64-manylinux_2_39 --generate-hashes \
 #     --extra-index-url https://pypi.nvidia.com --index-strategy unsafe-best-match polars.in
-# with polars.in = the `pip freeze` of the env to pin.
+# with polars.in = the `pip freeze` of the env to pin, plus the nvjitlink line.
 cuda-bindings==13.4.2 \
     --hash=sha256:11e8dadde03e8c00557d87c496e230aa196c03f68b89c375ed340fc4928e5190 \
     --hash=sha256:19697badd5b76ce31e264e214825eb24bf77c8bfd49eabf90c5c50c2751ef43a \
@@ -29,7 +31,7 @@ cuda-bindings==13.4.2 \
     --hash=sha256:fc0a18f65b26459cd3c49c0250a44b419cdf790cffcb096ff4d46a1973f6f4b7 \
     --hash=sha256:fef0b46c1300597a6df319a457525b0f6e7dd4f59aa809a193fcfd7a26ee50f9
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cuda-python
 cuda-core==1.2.0 \
     --hash=sha256:0dddba476d990c62a17b58b2c198a3b2768d575987577febda8f3e88140df192 \
@@ -51,13 +53,13 @@ cuda-core==1.2.0 \
     --hash=sha256:f4be442b2f79f3c8232824e0499fd6a8ef30244fd0b344e14ab75034b3e50de1 \
     --hash=sha256:f81b3728fedcab49daba69bc666e1307c62c1ad8d82b0d6616f6b878b2e20c5f
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cuda-python
     #   ucxx-cu13
 cuda-pathfinder==1.8.2 \
     --hash=sha256:4e65059febdb4d19d5cbc4798677e19db2b582f2f702f457b609e571690d357e
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cuda-bindings
     #   cuda-core
     #   cuda-python
@@ -65,14 +67,14 @@ cuda-pathfinder==1.8.2 \
 cuda-python==13.4.1 \
     --hash=sha256:b6b114882beb8325139a318a02bcf8feb821dfd724f6f6104c262e2d1e2035ef
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
     #   pylibcudf-cu13
     #   rapidsmpf-cu13
     #   rmm-cu13
 cudf-polars-cu13==26.6.0 \
     --hash=sha256:abf9d56f87a7fc61acf52aa59cc05dea36bc79056a0322a34cb0f7f469c74e7f
-    # via -r polars.in
+    # via -r polars2.in
 cupy-cuda13x==14.2.0 \
     --hash=sha256:006987701f5b9e248c357358159c9e38252b38dbb65fbc7ec15dc38d04fca462 \
     --hash=sha256:0a9b6538079c5151dcd99cf44b94cc3f1242315b7de0498b4619cef9b2a7c2c8 \
@@ -98,32 +100,32 @@ cupy-cuda13x==14.2.0 \
     --hash=sha256:f9a2a55abf889f6df68b5f62cd5f3ec4a2f305ac57ed09becd52e16201edcd86 \
     --hash=sha256:ff0bdebd1b43c0c6db53095784c787c4e4eae671356cf521c4b7482ed78a1a7e
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   rapidsmpf-cu13
 libcudf-cu13==26.6.0 \
     --hash=sha256:afb3186ba4fa77183774d2f30f6086e63fbd54cef338a4cd5c8d4db809e7d761 \
     --hash=sha256:e72e872be2b7a409e8cc953bd9abda750a03c3d30c2db510ebd2b73faf25878f
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   librapidsmpf-cu13
     #   pylibcudf-cu13
 libkvikio-cu13==26.6.0 \
     --hash=sha256:4f558df2c742ea2b4a2728cabd81096afd6ac2591199160f1a34394507f05a01 \
     --hash=sha256:56496826c3ab06360d7bf97255a3ceb78bc7dedcc85becac21dd6b2058f09f76
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   libcudf-cu13
 librapidsmpf-cu13==26.6.0 \
     --hash=sha256:44080c2869b1915aa8a9ddb34a67bf5cb20f9e2b2ce6f8691fc9f5a580a75877 \
     --hash=sha256:a7f2fd608e103d09090bfe0211f110805b7d48fd7fa94a1be80074a18229a08e
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   rapidsmpf-cu13
 librmm-cu13==26.6.0 \
     --hash=sha256:38eb8ee9757cc27c2980fb0c92b8443a843841a35613ddeaa7141d1f782c89ed \
     --hash=sha256:58dd98261f74ed0df523a93c063d182b8f1a8ee6b8afb46566e08f8829f28e13
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   libcudf-cu13
     #   librapidsmpf-cu13
     #   libucxx-cu13
@@ -132,13 +134,13 @@ libucx-cu13==1.20.1 \
     --hash=sha256:7eb91daf873fb9a3f5d34cc7f39e6f0720c07d2c5eb158dee823960a1731c117 \
     --hash=sha256:ceb464e46e8d9d7047b36fa45995d0265d23be234c7345b5cf332d8412257f64
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   libucxx-cu13
 libucxx-cu13==0.50.0 \
     --hash=sha256:2459022ef48cc28a0c5699c7c84b7f2c920d39ace6a18f268097efaed1611331 \
     --hash=sha256:548b9e9c60b3d69c47e7913034927bfaa98bff6ab6db291c5f8d086f72b3dd52
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   librapidsmpf-cu13
     #   ucxx-cu13
 numpy==2.5.3 \
@@ -209,7 +211,7 @@ numpy==2.5.3 \
     --hash=sha256:fc36dc566135b5eceec4cf89758fcb719266a019ef07dae1754ae7c9f617ef3e \
     --hash=sha256:ffdc76bfcae6b255dff75202c5e7feaf95b40246bc0a17944facc1fecf9f79ab
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cuda-core
     #   cupy-cuda13x
     #   rapidsmpf-cu13
@@ -220,15 +222,20 @@ nvidia-libnvcomp-cu13==5.2.0.13 \
     --hash=sha256:452f381b6c7302074a0e945faf88be11639802905e637a646a69806af298744c \
     --hash=sha256:6eb639633c9281e3c3b6a526d09e89c7190e633a2b005a22926cf61a4fee9159
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   libcudf-cu13
 nvidia-ml-py==13.610.43 \
     --hash=sha256:65437eb73d68d0c62c931ca4d45038472faff03bd0b8729abba4b899f70d60f2 \
     --hash=sha256:f13c72698edef492f985cc225f14faafe68ae065a2e407f45bdf6f4b9b43fde8
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
     #   ucxx-cu13
+nvidia-nvjitlink-cu12==12.9.86 \
+    --hash=sha256:994a05ef08ef4b0b299829cde613a424382aff7efb08a7172c1fa616cc3af2ca \
+    --hash=sha256:cc6fcec260ca843c10e34c936921a1c426b351753587fdd638e8cff7b16bb9db \
+    --hash=sha256:e3f1171dbdc83c5932a45f0f4c99180a70de9bd2718c1ab77d14104f6d7147f9
+    # via -r polars2.in
 nvtx==0.2.16 \
     --hash=sha256:13bb22db325321a0b383d156d84d22851127b3ffb686b54c2fabe0a7d182d53b \
     --hash=sha256:154df7d6d5f47d2831275c6e2ad6fc9e917abe90bbc2513c501943fc4ec1dbff \
@@ -260,19 +267,19 @@ nvtx==0.2.16 \
     --hash=sha256:f6d2922f5637b5f4c646599a066a770e7f26e154697dc217ad0aa8b831ea1338 \
     --hash=sha256:f70870ead7b6cf4227e4ae6ceba4e89a4bc3eecffbb62baca2c39a58d808df7e
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   pylibcudf-cu13
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
 polars==1.39.3 \
     --hash=sha256:2e016c7f3e8d14fa777ef86fe0477cec6c67023a20ba4c94d6e8431eefe4a63c \
     --hash=sha256:c2b955ccc0a08a2bc9259785decf3d5c007b489b523bf2390cf21cec2bb82a56
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
 polars-runtime-32==1.39.3 \
     --hash=sha256:06b47f535eb1f97a9a1e5b0053ef50db3a4276e241178e37bbb1a38b1fa53b14 \
@@ -285,7 +292,7 @@ polars-runtime-32==1.39.3 \
     --hash=sha256:ef5884711e3c617d7dc93519a7d038e242f5741cfe5fe9afd32d58845d86c562 \
     --hash=sha256:f49f51461de63f13e5dd4eb080421c8f23f856945f3f8bd5b2b1f59da52c2860
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   polars
 pyarrow==25.0.1 \
     --hash=sha256:0b1edbb2f385a6a65e9711b62ba86ac54a7816a3f8d17bb3e8a5929d65fb2485 \
@@ -331,19 +338,19 @@ pyarrow==25.0.1 \
     --hash=sha256:eb6203482ff3746a5632303a7279ae0b5a304c46985b49ed1378cb350ea6728d \
     --hash=sha256:f3831aaa25c67a99f99dc8b05873cb9d64560390372e2aa197ce9dd4a3f06a44 \
     --hash=sha256:f729cfdbd36fd99d543b67a914d2de044c84ebe45be8b34902b299b608c15c8f
-    # via -r polars.in
+    # via -r polars2.in
 pylibcudf-cu13==26.6.0 \
     --hash=sha256:9ffe1afeba14596328729645721cf9b79c0ecf4671578536f0b675eec000fe88 \
     --hash=sha256:d22210c9057aa51381d921ef62ad6ef53b9f64abb9a31840694ccd4f5301ee1d
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
     #   rapidsmpf-cu13
 rapids-logger==0.2.3 \
     --hash=sha256:119a0391a6965b773dc0e48c35e3872585e69418aedbc8b618ac2bf63ae12e28 \
     --hash=sha256:7fe67ef4049c5d8ba6154746325dcf7cc0f327f0efa8f2611fc8f64e67510f60
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   libcudf-cu13
     #   libkvikio-cu13
     #   librmm-cu13
@@ -351,13 +358,13 @@ rapidsmpf-cu13==26.6.0 \
     --hash=sha256:1b79fa4de5b0b6d0866085930e6480a566276417824f648e7b687d9a8d85b373 \
     --hash=sha256:ae9d54c6a7c79c3be37b935eae34db4b36278a6a38300dc5c15afab147a30f36
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
 rmm-cu13==26.6.0 \
     --hash=sha256:6e9990be37a501fa8e5278c6241d9ff36b4ad3ac157b7f99af61ac7048cc5bea \
     --hash=sha256:ead63feae409efaa9f092b586b6dc723ec35ef4d73b93f0230777ae386940366
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   pylibcudf-cu13
     #   rapidsmpf-cu13
     #   ucxx-cu13
@@ -365,11 +372,11 @@ typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   cudf-polars-cu13
 ucxx-cu13==0.50.0 \
     --hash=sha256:c5dbb0b0724fb92eba84bca3e64d1c467d20b3f8e25c20ece11aea0a2aab214c \
     --hash=sha256:fd0069ef436eb87615498fe2eb3436c5f495bea52d8b39120abc7d8744851e89
     # via
-    #   -r polars.in
+    #   -r polars2.in
     #   rapidsmpf-cu13

@@ -1,4 +1,4 @@
-# Sirius GPU SQL engine baseline (TPC-H SF500)
+# Sirius GPU SQL engine baseline
 
 [Sirius](https://github.com/sirius-db/sirius) is a **GPU-native SQL engine** from
 NVIDIA + UW-Madison. It loads as a **DuckDB extension** and *transparently*
@@ -9,10 +9,8 @@ Sirius"), is **out-of-core**: it streams Parquet through a tiered memory manager
 run datasets far larger than VRAM. Consumes query plans via the Substrait format;
 unsupported operators fall back to DuckDB CPU.
 
-This baseline runs the **same TPC-H q1-22 stream** the `rapids/` and `polars/`
-baselines use (`results/queries/stream_qualification.sql`) so the three engines
-are directly comparable on the same SF500 parquet and the same single 32 GB
-RTX 5090.
+This baseline runs the **same TPC-H q1-22 stream** as the other engines
+(`results/queries/stream_qualification.sql`) on the same parquet.
 
 ## Paper notes
 
@@ -24,65 +22,45 @@ RTX 5090.
   that DuckDB lowers to a cross-product (or that hits an unsupported type such as
   128-bit decimal / nested struct) silently falls back to CPU.
 
+## Build (in the image)
+
+The `sirius-build` stage of `docker/Dockerfile` clones `sirius-db/sirius` at the
+commit pinned in `versions.env` (`SIRIUS_REF`; its DuckDB submodule is the
+`v1.5.5-patches` branch, reporting `v1.5.5`), installs the toolchain from
+Sirius's own `pixi.lock` with `pixi install --frozen` (libcudf 26.08.01, CUDA
+13.3, clang 21), and runs `make` for H100 only (`CUDAARCHS=90a-real;90`). The
+final image keeps only `build/release/duckdb` (extension statically linked and
+auto-loading) and the pixi env's shared libraries, at the path the binary's
+RPATH names: `$SIRIUS_DUCKDB` and `$SIRIUS_ENVLIB`.
+
 ## Layout
 
 ```
-setup_sirius.sh      install pixi, clone sirius --recurse-submodules, build (Blackwell sm_120)
+env.sh               engine environment shared by the runner and the format probes:
+                     config with the IO backend resolved, spill dir
 sirius.yaml          gpu_execution config: 1 GPU, 95% VRAM, 128Gi host tier/NUMA, disk spill
 run_tpch_sirius.py   parses the shared query stream, runs each query through the Sirius
                      duckdb binary (transparent GPU), times cold+warm, counts result rows
 run_sirius.sh        safe per-query driver: one duckdb process per query + disk watchdog
-sirius/              the upstream clone (gitignored; re-create with setup_sirius.sh)
 ```
 
-Not committed (regenerate): the `sirius/` clone + its `.pixi/` build env, and the
-parquet datasets (from `datagen/`, staged to the ramdisk by `run.sh`).
+## Requirements
 
-## Requirements (all satisfied on this box)
-
-| Need | This box |
-|------|----------|
-| GPU compute capability ≥ 7.5 | RTX 5090 = **12.0** (Blackwell) |
-| CUDA 13.x, driver ≥ 580.65.06 | CUDA 13.0, driver **580.82.09** |
-| glibc ≥ 2.28, `io_uring` enabled | glibc 2.39, `io_uring_disabled=0`, no seccomp filter → native io_uring datasource in use. Where a container blocks `io_uring_setup`, `run_sirius.sh` auto-falls back to the kvikio POSIX backend (`SIRIUS_IO=kvikio` forces it) |
-| `O_DIRECT`-capable parquet storage | works on **/** and **/dev/shm** |
-
-## Build
-
-```bash
-cd /workspace/baseline/sirius
-./setup_sirius.sh          # ~pixi env solve + compile; produces sirius/build/release/duckdb
-```
-
-The build uses pixi's **default (CUDA 13) environment** — this is what targets
-Blackwell (`CUDAARCHS` includes `120a`/`120`). Do **not** build with `-e cuda12`
-on this box: it stops at Hopper (sm_90) and GPU ops die with "no kernel image".
-`setup_sirius.sh` restricts codegen to sm_120 for speed; widen with
-`CUDAARCHS='75-real;80-real;86-real;89-real;90a-real;100f-real;120a-real;120'`.
+| need | this setup |
+|------|------------|
+| GPU compute capability ≥ 7.5 | H100 = 9.0 (build targets `90a`) |
+| CUDA 13.x driver | driver 595.71.05; CUDA 13.3 user space from the pixi env |
+| glibc ≥ 2.28, `io_uring` | Ubuntu 24.04 (glibc 2.39). Docker's default seccomp profile blocks io_uring, so `docker/run.sh` uses `docker/seccomp-iouring.json` and `--ulimit memlock=-1`; `sirius/env.sh` probes `io_uring_setup` and falls back to the kvikio POSIX backend where it is blocked (`SIRIUS_IO=kvikio` forces it). `make doctor` checks |
+| `O_DIRECT`-capable parquet storage | `/dev/shm` (the runs read the ramdisk copy) |
 
 ## Run
 
-Data must already be staged to the ramdisk (same as the other baselines):
-
 ```bash
-# run all 22 (or a subset) through Sirius on the GPU
-cd /workspace/baseline/sirius
-./run_sirius.sh                 # queries 1..22
-./run_sirius.sh "1 6 9"         # a subset
+make bench SF=100 ENGINES=sirius        # stage -> run 22 queries -> merge into all_results.csv
 ```
 
-To run Sirius across scale factors (stage each SF into the ramdisk, run it, free
-it), use the central entry point from the repo root — it drives every engine over
-the same datasets and merges into `results/all_results.csv`:
-
-```bash
-ENGINES="sirius" ../run.sh 30-300      # or any SF_SPEC; see top-level README.md
-```
-
-Output: results are upserted into `results/all_results.csv` (the one canonical
-file; `seconds` = cold-scan time, startup excluded — see the schema in the
-top-level `README.md`/`AGENTS.md`). `run_sirius.sh` writes a throwaway temp CSV,
-folds it in via `merge_results.py sirius <TPCH_SF> <temp>`, and deletes it. Per-query
+Output: rows are upserted into `results/all_results.csv` (`seconds` = cold-scan
+time, startup excluded — see the schema in `README.md` / `AGENTS.md`). Per-query
 and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
 
 ### Methodology (matches rapids/polars)
@@ -96,14 +74,15 @@ and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
   Iteration 0 = **cold** (the reported `seconds`, comparable to the rapids/polars
   cold parquet scan); iteration 1 = **warm** (Sirius scan cache).
 - Single GPU (`topology.num_gpus: 1`) to match `rapids` (`local[*]`, one GPU) and
-  `polars` (`device 0`). For 2-GPU, set `num_gpus: 2` or `CUDA_VISIBLE_DEVICES=0,1`.
+  `polars` (`device 0`).
 
 ## Tuning knobs
 
 - `sirius.yaml` — `memory.gpu.usage_limit_fraction`, `memory.host.capacity_bytes`
   (pinned, per NUMA node), `memory.disk.downgrade_root_dirs` (spill dir).
 - Env: `SIRIUS_ITERS` (default 2), `SIRIUS_TIMEOUT` (default 2400s), `MIN_FREE_GB`
-  (default 25), `SIRIUS_PARQUET`, `SIRIUS_CONFIG_FILE`.
+  (default 25), `SIRIUS_CONFIG_FILE`, `SIRIUS_IO`.
 - To *prove* GPU execution (surface fallbacks as errors instead of silent CPU):
-  add `SET enable_duckdb_fallback=false;` — the runner also greps the Sirius log
-  and records a `gpu`/`fallback` flag per query in the detail CSV.
+  add `SET enable_duckdb_fallback=false;` (the format probes do) — the runner
+  also greps the Sirius log and records a `gpu`/`fallback` flag per query in the
+  detail CSV.
