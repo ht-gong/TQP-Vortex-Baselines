@@ -147,20 +147,27 @@ def main():
         n = sum(rows)
         manifest["tables"][table] = {"rows": n, "files": [[os.path.basename(f), r] for f, r in zip(files, rows)]}
         for col in [c for c in pfs[0].schema_arrow.names if c not in SKIP]:
-            parts = []
+            # Fill one preallocated array, so a column is held once (SF1000
+            # L_SHIPINSTRUCT alone is 6e9 x 25 bytes).
+            arr, pos = None, 0
             for p in pfs:
                 for chunk in p.read(columns=[col]).column(0).chunks:
-                    parts.append(convert(col, chunk))
-            arr = np.concatenate(parts) if parts else None
-            if arr is None or len(arr) != n:
-                fail(f"{col}: {0 if arr is None else len(arr)} rows, expected {n}")
+                    part = convert(col, chunk)
+                    if arr is None:
+                        arr = np.empty((n,) + part.shape[1:], dtype=part.dtype)
+                    if pos + len(part) > n:
+                        fail(f"{col}: more than {n} rows")
+                    arr[pos:pos + len(part)] = part
+                    pos += len(part)
+            if arr is None or pos != n:
+                fail(f"{col}: {pos} rows, expected {n}")
             name = f"SF{sf}-tensor-{col.upper()}.pth"
-            tensor = torch.from_numpy(np.ascontiguousarray(arr))
+            tensor = torch.from_numpy(arr)
             save(tensor, os.path.join(tmp, name))
             manifest["columns"][col.upper()] = {"dtype": str(tensor.dtype).replace("torch.", ""),
                                                 "shape": list(tensor.shape)}
             print(f"  {name:32s} {manifest['columns'][col.upper()]['dtype']:8s} {tuple(tensor.shape)}", flush=True)
-            del parts, arr, tensor
+            del arr, tensor
     with open(os.path.join(tmp, f"SF{sf}-manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
     if len(manifest["columns"]) != 54:
