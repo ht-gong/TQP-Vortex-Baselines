@@ -387,7 +387,9 @@ def select(sf, tol, out):
                "written as one dataset with it.", ""]
     report += ["## Summary", "",
                "Summed probe seconds over all columns: the map vs the default format "
-               f"(`{DEFAULT_FORMAT}`) and vs the best single uniform format.", "",
+               f"(`{DEFAULT_FORMAT}`) and vs the best single uniform format. The map's sum "
+               "is optimistic: each column takes the minimum of several noisy medians, so "
+               "part of its lead over a uniform format is selection noise.", "",
                "| engine | map s | default s | best uniform | uniform s | columns ≠ default | no eligible format |",
                "|---|---:|---:|---|---:|---:|---:|"]
     for e in engines:

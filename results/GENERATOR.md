@@ -71,7 +71,7 @@ Restoring them means regenerate-clean + revalidate + re-run (below).
 ## Guard — `results/validate_dataset.py`
 
 ```
-python3 results/validate_dataset.py <parquet_dir> <scale_factor>
+make validate SF=<scale_factor>          # or: $PY results/validate_dataset.py <parquet_dir> <SF>
 ```
 
 Exits non-zero unless the dataset is clean external NDS-H. It checks:
@@ -81,8 +81,8 @@ Exits non-zero unless the dataset is clean external NDS-H. It checks:
   `distinct(p_brand,p_type,p_size) ≤ 187,500` (rejects the SF100/SF300 corruption);
 - **row counts** match the TPC-H per-SF formula.
 
-`datagen/gen_tpch.sh` runs this automatically after generation and fails
-loudly if the fresh dataset does not pass. Run it by hand before trusting any
+`datagen/gen_tpch.sh` runs this automatically after generation and publishes
+`parquet/` only if the fresh dataset passes. Run it by hand before trusting any
 dataset you did not just generate.
 
 ## Regenerating SF30/50/100/300 to restore them
@@ -90,7 +90,7 @@ dataset you did not just generate.
 ```bash
 # generate + validate (PARALLEL≈2·SF, BATCH 25), then run every engine at that SF;
 # each engine self-merges into all_results.csv
-./run.sh 300            # generates $DATA_DIR/sf300 if missing, validates, runs
+make bench SF=300       # generates $DATA_DIR/sf300 if missing, validates, runs
 ```
 
 (GPU engines: int32 caps ≈ SF300.)
