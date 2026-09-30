@@ -11,16 +11,19 @@
 # results are appended incrementally.
 #
 #   run_sirius.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
+#
+# Env: SIRIUS_PARQUET (dataset), TPCH_SF, PY, and the image's SIRIUS_DUCKDB /
+# SIRIUS_ENVLIB (sirius/env.sh).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 QUERIES="${1:-$(seq 1 22)}"
 DIR="${ROOT}/sirius"
-RAM_PQ="${SIRIUS_PARQUET:-/dev/shm/tpch_sf500/parquet}"
+RAM_PQ="${SIRIUS_PARQUET:?SIRIUS_PARQUET is not set}"
 STREAM="${ROOT}/results/queries/stream_qualification.sql"
 LOGDIR="${ROOT}/results"
-TPCH_SF="${TPCH_SF:-500}"
+TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
 # Per-query rows go to a throwaway temp CSV and are folded into the single
 # canonical results/all_results.csv at the end (merge_results.py); no per-run
 # CSV is kept. TAG only names the gitignored per-query log files.
@@ -43,7 +46,7 @@ log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
 free_gb(){ df -k --output=avail / | tail -1 | awk '{print int($1/1024/1024)}'; }
 
 if [ ! -x "${SIRIUS_DUCKDB}" ]; then
-  log "ERROR: sirius duckdb not built at ${SIRIUS_DUCKDB} -- run setup_sirius.sh first"; exit 1
+  log "ERROR: no Sirius duckdb binary at ${SIRIUS_DUCKDB}"; exit 1
 fi
 
 log "Sirius per-query run. queries=[${QUERIES}] iters=${SIRIUS_ITERS} timeout=${SIRIUS_TIMEOUT}s min_free=${MIN_FREE_GB}GB"
@@ -55,9 +58,7 @@ for q in ${QUERIES}; do
   rm -rf "${SPILL:?}"/* 2>/dev/null
   qlog="${LOGDIR}/${TAG}_q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
-  # Run inside the pixi env so the duckdb binary's conda libs are on the loader path.
-  ( cd "${DIR}/sirius" && "${PIXI}" run --manifest-path "${DIR}/sirius/pixi.toml" \
-      python "${DIR}/run_tpch_sirius.py" "${RAM_PQ}" "${STREAM}" "${OUT_CSV}" "${q}" append ) \
+  "${PY:?PY is not set}" "${DIR}/run_tpch_sirius.py" "${RAM_PQ}" "${STREAM}" "${OUT_CSV}" "${q}" append \
       >"${qlog}" 2>&1 &
   pid=$!
 
@@ -88,6 +89,6 @@ log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
 
 # Fold this run into the single canonical results table, then drop the temp CSVs.
 if [ "${TPCH_MERGE:-1}" = 1 ]; then
-  python3 ${ROOT}/merge_results.py sirius "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+  "${PY}" "${ROOT}/merge_results.py" sirius "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
     && rm -f "${OUT_CSV}" "${DETAIL_CSV}"
 fi

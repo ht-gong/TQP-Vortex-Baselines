@@ -6,26 +6,29 @@
 #     threshold -> the box can never wedge on a full disk again.
 #
 #   run_tpch_safe.sh [QUERY_LIST]      e.g. "1 2 3"  (default: 1..22)
+#
+# Env: TPCH_PARQUET (dataset), TPCH_SF, SCRATCH (Spark local dirs go to
+# $SCRATCH/rapids), plus the image's PY / JAVA_HOME / SPARK_HOME / RAPIDS_JAR.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 QUERIES="${1:-$(seq 1 22)}"
 RAPIDS_DIR="${ROOT}/rapids"
-RAM_PQ="${TPCH_PARQUET:-/dev/shm/tpch_sf500/parquet}"
+RAM_PQ="${TPCH_PARQUET:?TPCH_PARQUET is not set}"
 STREAM="${ROOT}/results/queries/stream_qualification.sql"
-TPCH_SF="${TPCH_SF:-500}"
+TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
 # throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
 OUT_CSV="${OUT_CSV:-/tmp/tpch_rapids_sf${TPCH_SF}.csv}"
-SCRATCH="${SPARK_SCRATCH:-${ROOT}/_spark_scratch}"
+SPARK_DIR="${SCRATCH:?SCRATCH is not set}/rapids"
 LOG="${ROOT}/results/safe_run.log"
 DRIVER_MEM="${DRIVER_MEM:-96g}"      # JVM heap (host spill store is off-heap, separate)
 MIN_FREE_GB="${MIN_FREE_GB:-30}"     # kill a query if free disk drops below this
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-0}"  # kill a query after this many seconds (0 = never); row -> TIMEOUT
 
 source "${RAPIDS_DIR}/activate.sh" >/dev/null 2>&1
-rapids_run_args "${SCRATCH}"
-mkdir -p "${SCRATCH}"
+rapids_run_args "${SPARK_DIR}"
+mkdir -p "${SPARK_DIR}"
 rm -f "${OUT_CSV}"; : > "${LOG}"
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
 
@@ -35,7 +38,7 @@ log "Safe per-query RAPIDS run. queries=[${QUERIES}] min_free=${MIN_FREE_GB}GB d
 log "free disk at start: $(free_gb)GB ; ramdisk: $(du -sh ${RAM_PQ%/parquet} 2>/dev/null | cut -f1)"
 
 for q in ${QUERIES}; do
-  rm -rf "${SCRATCH:?}"/* 2>/dev/null
+  rm -rf "${SPARK_DIR:?}"/* 2>/dev/null
   qlog="${ROOT}/results/q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
   env -u CONTAINER_ID spark-submit "${RAPIDS_RUN_ARGS[@]}" \
@@ -72,13 +75,13 @@ for q in ${QUERIES}; do
     res=$(grep -E "^query${q}[, ]" "${OUT_CSV}" | tail -1)
     log "    query ${q}: done rc=${rc} -> ${res:-<no csv row>}"
   fi
-  rm -rf "${SCRATCH:?}"/* 2>/dev/null
+  rm -rf "${SPARK_DIR:?}"/* 2>/dev/null
 done
 
 log "ALL DONE. free disk: $(free_gb)GB"
 log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
 
 if [ "${TPCH_MERGE:-1}" = 1 ]; then
-  python3 ${ROOT}/merge_results.py rapids "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+  "${PY}" "${ROOT}/merge_results.py" rapids "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
     && rm -f "${OUT_CSV}"
 fi

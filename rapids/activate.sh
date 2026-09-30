@@ -1,17 +1,15 @@
 #!/bin/bash
 # Source this to get a ready-to-use spark-rapids shell:
 #   source rapids/activate.sh
-# It activates the Spark env (the datagen toolchain: pyspark 3.5.8 + JDK 17),
-# sets JAVA_HOME / SPARK_HOME, and exports $RAPIDS_JAR and $RAPIDS_CONF plus a
+# It puts the Spark toolchain on PATH (datagen/env.sh: PY, JAVA_HOME,
+# SPARK_HOME) and exports $RAPIDS_JAR (set by the image) and $RAPIDS_CONF, plus a
 # `rapids-submit` helper and `rapids_run_args` (the flags of the benchmark runs).
 
 RAPIDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "${RAPIDS_DIR}/../datagen/env.sh"
-export SPARK_HOME="$(python -c 'import pyspark,os;print(os.path.dirname(pyspark.__file__))')"
-export RAPIDS_JAR="${RAPIDS_DIR}/jars/rapids-4-spark_2.12-26.04.2-cuda12.jar"
-export RAPIDS_CONF="${RAPIDS_DIR}/conf/spark-rapids.conf"
-export PATH="${SPARK_HOME}/bin:${PATH}"
+: "${RAPIDS_JAR:?RAPIDS_JAR is not set}"
+export RAPIDS_CONF="${RAPIDS_CONF:-${RAPIDS_DIR}/conf/spark-rapids.conf}"
 
 # Convenience: spark-submit with the GPU plugin already wired in.
 # `env -u CONTAINER_ID` stops Spark from mistaking this Vast container for a

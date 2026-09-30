@@ -1,11 +1,13 @@
 #!/bin/bash
 # Source this for the Sirius engine environment, shared by the TPC-H runner
-# (run_sirius.sh) and the format probes (ablation/): the Sirius duckdb binary,
-# its gpu_execution config with the IO backend resolved, and the spill dir.
-# Sets SIRIUS_DUCKDB, SIRIUS_CONFIG_FILE, SIRIUS_IO (uring|kvikio), SIRIUS_SPILL.
+# (run_sirius.sh) and the format probes (ablation/): the Sirius duckdb binary
+# ($SIRIUS_DUCKDB) and its pixi env's lib dir ($SIRIUS_ENVLIB), both set by the
+# image, its gpu_execution config with the IO backend resolved, and the spill
+# dir. Sets SIRIUS_CONFIG_FILE, SIRIUS_IO (uring|kvikio), SIRIUS_SPILL.
 _SI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-export SIRIUS_DUCKDB="${SIRIUS_DUCKDB:-${_SI_DIR}/sirius/build/release/duckdb}"
+: "${SIRIUS_DUCKDB:?SIRIUS_DUCKDB is not set}" "${SIRIUS_ENVLIB:?SIRIUS_ENVLIB is not set}"
+export SIRIUS_DUCKDB SIRIUS_ENVLIB
 export SIRIUS_CONFIG_FILE="${SIRIUS_CONFIG_FILE:-${_SI_DIR}/sirius.yaml}"
 SIRIUS_SPILL="/dev/shm/_sirius_spill"   # matches downgrade_root_dirs in sirius.yaml
 # kvikio compat (POSIX) mode for anything still routed through kvikio: cuFile/GDS
@@ -40,10 +42,4 @@ if [ "${SIRIUS_IO}" = kvikio ]; then
   trap 'rm -f "${_sirius_cfg}"' EXIT
 fi
 export SIRIUS_IO
-
-# The pixi runtime env provides the binary's conda libs (libcudf, rmm, cudart,
-# ...); callers run it via `pixi run`. ~/.pixi/bin must be on PATH: Sirius's own
-# pixi_activate.sh calls bare `pixi` during env activation.
-export PATH="${HOME}/.pixi/bin:${PATH}"
-PIXI="${HOME}/.pixi/bin/pixi"
 mkdir -p "${SIRIUS_SPILL}"

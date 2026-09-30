@@ -4,8 +4,9 @@
 #
 #   probe.sh <engine> <parquet_dir> <columns_file> <out_csv>
 #
-# Env: PROBE_SCRATCH (engine scratch dir; must not be on the nearly full /),
-#      PROBE_LOG_DIR (Sirius log dir), CUDA_VISIBLE_DEVICES.
+# Env: PROBE_SCRATCH (engine scratch dir), PROBE_LOG_DIR (Sirius log dir), and
+#      the image's tool variables (PY, POLARS_PY, JAVA_HOME, SPARK_HOME,
+#      RAPIDS_JAR, SIRIUS_DUCKDB, SIRIUS_ENVLIB).
 set -euo pipefail
 ENGINE="${1:?engine}"; shift
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,17 +24,14 @@ case "${ENGINE}" in
     # shellcheck disable=SC1091
     source "${ROOT}/polars/env.sh"
     export POLARS_TEMP_DIR="${SCRATCH}"
-    exec python "${HERE}/probe_polars.py" "$@" ;;
+    exec "${POLARS_PY}" "${HERE}/probe_polars.py" "$@" ;;
   duckdb_cpu)
-    PY="${PYTHON:-${ROOT}/datagen-venv/bin/python}"
-    exec "${PY}" "${HERE}/probe_duckdb.py" "$@" ;;
+    exec "${PY:?PY is not set}" "${HERE}/probe_duckdb.py" "$@" ;;
   sirius)
     # shellcheck disable=SC1091
     source "${ROOT}/sirius/env.sh"
     export SIRIUS_LOG_DIR="${PROBE_LOG_DIR:-${SCRATCH}}"
     rm -rf "${SIRIUS_SPILL:?}"/* 2>/dev/null || true
-    cd "${ROOT}/sirius/sirius"
-    "${PIXI}" run --manifest-path "${ROOT}/sirius/sirius/pixi.toml" \
-      python "${HERE}/probe_sirius.py" "$@" ;;
+    "${PY:?PY is not set}" "${HERE}/probe_sirius.py" "$@" ;;
   *) echo "probe.sh: unknown engine '${ENGINE}'" >&2; exit 2 ;;
 esac

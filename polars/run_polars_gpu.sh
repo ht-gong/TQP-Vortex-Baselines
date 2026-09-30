@@ -5,24 +5,27 @@
 # pool). Per-query time excludes startup (warm-up).
 #
 #   run_polars_gpu.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
+#
+# Env: TPCH_PARQUET (dataset), TPCH_SF, SCRATCH (spill goes to $SCRATCH/polars),
+# POLARS_PY (the image's cudf-polars env).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 QUERIES="${1:-$(seq 1 22)}"
 DIR="${ROOT}/polars"
-RAM_PQ="${TPCH_PARQUET:-/dev/shm/tpch_sf500/parquet}"
-TPCH_SF="${TPCH_SF:-500}"
+RAM_PQ="${TPCH_PARQUET:?TPCH_PARQUET is not set}"
+TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
 # throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
 OUT_CSV="${OUT_CSV:-/tmp/tpch_polars_gpu_sf${TPCH_SF}.csv}"
-SCRATCH="${ROOT}/_polars_scratch_gpu"
+SPILL_DIR="${SCRATCH:?SCRATCH is not set}/polars"
 LOG="${ROOT}/results/polars_gpu_run.log"
 MIN_FREE_GB="${MIN_FREE_GB:-30}"
 QUERY_TIMEOUT="${QUERY_TIMEOUT:-0}"  # kill a query after this many seconds (0 = never); row -> TIMEOUT
 
 source "${DIR}/env.sh"
-export POLARS_TEMP_DIR="${SCRATCH}"
-mkdir -p "${SCRATCH}"
+export POLARS_TEMP_DIR="${SPILL_DIR}"
+mkdir -p "${SPILL_DIR}"
 rm -f "${OUT_CSV}"; : > "${LOG}"
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
 free_gb(){ df -k --output=avail / | tail -1 | awk '{print int($1/1024/1024)}'; }
@@ -31,10 +34,10 @@ log "Polars GPU per-query run. queries=[${QUERIES}] mr=${GPU_MR} part=${GPU_PART
 log "free disk at start: $(free_gb)GB"
 
 for q in ${QUERIES}; do
-  rm -rf "${SCRATCH:?}"/* 2>/dev/null
+  rm -rf "${SPILL_DIR:?}"/* 2>/dev/null
   qlog="${ROOT}/results/polars_gpu_q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
-  python "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append \
+  "${POLARS_PY}" "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append \
     >"${qlog}" 2>&1 &
   pid=$!
   killed=0; timedout=0; tstart=$(date +%s)
@@ -60,13 +63,13 @@ for q in ${QUERIES}; do
     res=$(grep -E "^query${q}[, ]" "${OUT_CSV}" | tail -1)
     log "    query ${q}: done rc=${rc} -> ${res:-<no csv row>}"
   fi
-  rm -rf "${SCRATCH:?}"/* 2>/dev/null
+  rm -rf "${SPILL_DIR:?}"/* 2>/dev/null
 done
 
 log "ALL DONE. free disk: $(free_gb)GB"
 log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
 
 if [ "${TPCH_MERGE:-1}" = 1 ]; then
-  python3 ${ROOT}/merge_results.py polars_gpu "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+  "${POLARS_PY}" "${ROOT}/merge_results.py" polars_gpu "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
     && rm -f "${OUT_CSV}"
 fi

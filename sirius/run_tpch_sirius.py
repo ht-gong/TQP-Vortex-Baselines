@@ -25,7 +25,9 @@ a companion *_detail.csv records cold, warm(best) and the GPU/fallback flag.
     SUBSET  comma-separated query numbers, e.g. "9" or "1,2,3"  (default 1..22)
 
 Environment:
-  SIRIUS_DUCKDB        path to the built duckdb binary (default: sirius/sirius/build/release/duckdb)
+  SIRIUS_DUCKDB        path to the built duckdb binary
+  SIRIUS_ENVLIB        its pixi env's lib dir (libcudf, rmm, cudart, ...); put on
+                       the binary's LD_LIBRARY_PATH (its RPATH names it as well)
   SIRIUS_CONFIG_FILE   path to the gpu_execution YAML config (required by Sirius)
   SIRIUS_ITERS         iterations per query (default 2: 1 cold + 1 warm)
   SIRIUS_TIMEOUT       per-query subprocess timeout in seconds (default 1800)
@@ -47,7 +49,7 @@ OUT_CSV = sys.argv[3]
 SUBSET = [int(x) for x in sys.argv[4].split(",")] if len(sys.argv) > 4 and sys.argv[4] else list(range(1, 23))
 APPEND = len(sys.argv) > 5 and sys.argv[5] == "append"
 
-DUCKDB = os.environ.get("SIRIUS_DUCKDB", os.path.join(HERE, "sirius", "build", "release", "duckdb"))
+DUCKDB = os.environ["SIRIUS_DUCKDB"]
 ITERS = int(os.environ.get("SIRIUS_ITERS", "2"))
 TIMEOUT = int(os.environ.get("SIRIUS_TIMEOUT", "1800"))
 LOG_DIR = os.environ.get("SIRIUS_LOG_DIR", "")
@@ -130,17 +132,23 @@ def parse_output(text):
     return iters
 
 
+def newest_log():
+    logs = sorted(glob.glob(os.path.join(LOG_DIR, "sirius*.log")), key=os.path.getmtime) if LOG_DIR else []
+    return logs[-1] if logs else None
+
+
 def gpu_or_fallback(log_before):
     """Best-effort: inspect the newest Sirius log written during this run to see
-    whether Sirius handled the query on GPU or DuckDB CPU fallback kicked in."""
-    if not LOG_DIR:
+    whether Sirius handled the query on GPU or DuckDB CPU fallback kicked in.
+    log_before = (path, size) of the newest log before the run; Sirius starts a
+    new (dated) file each day, and then the whole new file belongs to this run."""
+    log = newest_log()
+    if not log:
         return "?"
-    logs = sorted(glob.glob(os.path.join(LOG_DIR, "sirius*.log")), key=os.path.getmtime)
-    if not logs:
-        return "?"
+    start = log_before[1] if log == log_before[0] else 0
     try:
-        with open(logs[-1], errors="ignore") as f:
-            txt = f.read()[log_before:]
+        with open(log, errors="ignore") as f:
+            txt = f.read()[start:]
     except OSError:
         return "?"
     low = txt.lower()
@@ -163,12 +171,11 @@ def run_query(num, stmts):
     tmp = f"/tmp/sirius_q{num}.sql"
     with open(tmp, "w") as f:
         f.write(sql)
-    log_before = 0
-    if LOG_DIR:
-        logs = sorted(glob.glob(os.path.join(LOG_DIR, "sirius*.log")), key=os.path.getmtime)
-        if logs:
-            log_before = os.path.getsize(logs[-1])
+    log = newest_log()
+    log_before = (log, os.path.getsize(log) if log else 0)
     env = dict(os.environ)
+    if os.environ.get("SIRIUS_ENVLIB"):
+        env["LD_LIBRARY_PATH"] = os.environ["SIRIUS_ENVLIB"]
     t0 = time.time()
     try:
         p = subprocess.run([DUCKDB, "-f", tmp], capture_output=True, text=True,

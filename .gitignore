@@ -47,5 +47,8 @@ _polars_scratch_gpu
 results/format_ablation/
 results/format_profile_logs/
 
+# ---- box-specific settings for make / docker/run.sh (copy local.env.example) ----
+/local.env
+
 # ---- local planning notes (not committed) ----
 /docs/docker_migration_plan.md

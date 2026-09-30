@@ -32,10 +32,10 @@ Stages of `run`:
                 median seconds over rounds. Formats within TOL of the fastest
                 count as tied and the one with the fewest bytes wins.
 
-Env: DATA_DIR (datasets), SHM (ramdisk root, default /dev/shm), GPU or
-CUDA_VISIBLE_DEVICES (the one GPU every GPU engine uses), PROBE_TIMEOUT,
-SPARK_SCRATCH (engine scratch, default $DATA_DIR/_probe_scratch),
-GEN_PARALLEL / GEN_BATCH (dbgen chunking for new variants, as run.sh).
+Env: DATA_DIR (datasets), SCRATCH (engine scratch goes to $SCRATCH/probe),
+SHM (ramdisk root, default /dev/shm), GPU or CUDA_VISIBLE_DEVICES (the one GPU
+every GPU engine uses), PROBE_TIMEOUT, GEN_PARALLEL / GEN_BATCH (dbgen chunking
+for new variants, as run.sh), and the image's tool variables.
 """
 import argparse
 import csv
@@ -270,7 +270,9 @@ def probes(sf, paths, engines, rounds, out, seed):
     # spark-rapids hangs outright on some delta+zstd reads; a probe normally
     # takes seconds, so the cap stays short and grows with the data.
     timeout = int(os.environ.get("PROBE_TIMEOUT", 30 + sf // 2))
-    scratch = os.environ.get("SPARK_SCRATCH") or os.path.join(data_dir(), "_probe_scratch")
+    if not os.environ.get("SCRATCH"):
+        sys.exit("SCRATCH is not set")
+    scratch = os.path.join(os.environ["SCRATCH"], "probe")
     env = dict(os.environ, PROBE_SCRATCH=scratch)
     gpu = os.environ.get("GPU") or os.environ.get("CUDA_VISIBLE_DEVICES")
     if GPU_ENGINES & set(engines) and not gpu:

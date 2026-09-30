@@ -14,7 +14,8 @@
 #     BATCH     chunks generated+transcoded per iteration, e.g. 100
 #     OUT_DIR   output root; final parquet lands in $OUT_DIR/parquet/<table>/
 #
-# Env: DRIVER_MEM (Spark driver heap, default 96g), DBGEN_DIR,
+# Env: PY, JAVA_HOME, SPARK_HOME, DBGEN_DIR (set by the image; datagen/env.sh),
+#   DRIVER_MEM        Spark driver heap (default 96g)
 #   SPARK_LOCAL_DIRS  Spark scratch (default $OUT_DIR/_work/spark-local, i.e. on
 #                     the dataset's disk, not /tmp)
 #   RAW_STORE=<dir>   keep dbgen's raw text per batch under <dir>/b<start>-<end>/
@@ -54,8 +55,8 @@ die(){ echo "gen_tpch.sh: $*" >&2; exit 1; }
 [ ! -e "${FINAL}" ] || die "${FINAL} already exists; delete it to regenerate"
 # shellcheck disable=SC1091
 source "${HERE}/env.sh" || die "datagen toolchain missing (datagen/env.sh failed)"
-command -v spark-submit >/dev/null || die "spark-submit not on PATH (SPARK_HOME=${SPARK_HOME:-unset})"
-[ -x "${DBGEN_DIR}/dbgen" ] || die "dbgen not built at ${DBGEN_DIR}/dbgen"
+command -v spark-submit >/dev/null || die "spark-submit not on PATH (SPARK_HOME=${SPARK_HOME})"
+[ -x "${DBGEN_DIR:?DBGEN_DIR is not set}/dbgen" ] || die "no dbgen at ${DBGEN_DIR}/dbgen"
 export SPARK_LOCAL_DIRS="${SPARK_LOCAL_DIRS:-${WORK}/spark-local}"
 
 if [ -n "${RAW_STORE}" ]; then

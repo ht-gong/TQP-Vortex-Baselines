@@ -7,7 +7,7 @@ session, so a probe Sirius cannot run on the GPU fails instead of silently
 running on the CPU; such errors are recorded as FALLBACK. `.bail off` keeps the
 process going after a failed probe, as the other engines' workers do.
 
-Env: SIRIUS_DUCKDB (the Sirius duckdb binary), SIRIUS_CONFIG_FILE (as the runner).
+Env: SIRIUS_DUCKDB, SIRIUS_ENVLIB, SIRIUS_CONFIG_FILE (as the runner).
 """
 import glob
 import os
@@ -59,8 +59,9 @@ def main():
     with open(sql, "w") as f:
         f.write(script(parquet, cols))
     # Line-buffered so markers reach us (and the driver's timeout) as they run.
+    env = dict(os.environ, LD_LIBRARY_PATH=os.environ["SIRIUS_ENVLIB"])
     proc = subprocess.Popen(["stdbuf", "-oL", "-eL", os.environ["SIRIUS_DUCKDB"], "-f", sql],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     out = Lines(proc.stdout)
 
     def probe(table, column):

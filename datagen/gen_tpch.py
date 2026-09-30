@@ -51,10 +51,12 @@ def cmd_dbgen(args):
     start, end = (int(x) for x in args.range.split(","))
     if not (1 <= start <= end <= int(args.parallel)):
         sys.exit(f"bad --range {args.range}: need 1 <= start <= end <= parallel={args.parallel}")
+    if not args.dbgen_dir:
+        sys.exit("no dbgen dir: pass --dbgen-dir or set DBGEN_DIR")
     dbgen_dir = os.path.abspath(args.dbgen_dir)
     exe = os.path.join(dbgen_dir, "dbgen")
     if not os.access(exe, os.X_OK):
-        sys.exit(f"dbgen not built at {exe} (run datagen/setup_datagen.sh)")
+        sys.exit(f"no dbgen binary at {exe}")
     out = os.path.abspath(args.out)
     os.makedirs(out, exist_ok=True)
 
@@ -177,8 +179,8 @@ def main():
     g.add_argument("--parallel", required=True, type=int)
     g.add_argument("--range", required=True, help='"start,end" inclusive chunk range')
     g.add_argument("--out", required=True)
-    g.add_argument("--dbgen-dir", default=os.environ.get(
-        "DBGEN_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "dbgen")))
+    g.add_argument("--dbgen-dir", default=os.environ.get("DBGEN_DIR"),
+                   help="dir with the dbgen binary and dists.dss (default $DBGEN_DIR)")
     g.set_defaults(fn=cmd_dbgen)
 
     tr = sub.add_parser("transcode", help="RAW_DIR/<table> text -> PQ_DIR/<table> parquet")
