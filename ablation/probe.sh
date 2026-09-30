@@ -12,7 +12,10 @@ ENGINE="${1:?engine}"; shift
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${HERE}/.." && pwd)"
 SCRATCH="${PROBE_SCRATCH:?PROBE_SCRATCH}"
+# Workers run one at a time; empty the scratch like the runners do between
+# queries (a killed Spark worker leaves its local dir, incl. an 880 MB jar copy).
 mkdir -p "${SCRATCH}"
+rm -rf "${SCRATCH:?}"/* 2>/dev/null || true
 
 case "${ENGINE}" in
   rapids)
