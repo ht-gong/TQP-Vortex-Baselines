@@ -19,7 +19,7 @@
 #             Default: "rapids polars_gpu duckdb_cpu sirius"
 #             Also available: polars_cpu.
 #   DATA_DIR  where datasets live on disk, as $DATA_DIR/sf<SF>/parquet/<table>/.
-#             Default: $REPO/data. Missing datasets are generated here.
+#             Default: /data/haotiang/parquet-ablation (NVMe). Missing datasets are generated here.
 #   SHM       ramdisk root (default /dev/shm).
 #   QUERIES   query subset (default "1 2 ... 22").
 #   KEEP_RAMDISK=1   keep the staged ramdisk copy after a scale factor (default: delete).
@@ -35,13 +35,18 @@ set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHM="${SHM:-/dev/shm}"
-DATA_DIR="${DATA_DIR:-${REPO}/data}"
+DATA_DIR="${DATA_DIR:-/data/haotiang/parquet-ablation}"
 ENGINES="${ENGINES:-rapids polars_gpu duckdb_cpu sirius}"
 QUERIES="${QUERIES:-$(seq 1 22)}"
 CANON_SFS="30 50 100 300 500 700"
 
-PIPELINE="${REPO}/rapids/nds_h_pipeline.sh"
+# In-repo generator (datagen/); verified equivalent to the upstream NDS-H
+# pipeline it replaced (rapids/nds_h_pipeline.sh, kept as the reference).
+PIPELINE="${PIPELINE:-${REPO}/datagen/gen_tpch.sh}"
 VALIDATOR="${REPO}/results/validate_dataset.py"
+# validate_dataset.py needs pyarrow: prefer the datagen venv (datagen/setup_datagen.sh).
+PY="${PYTHON:-}"; [ -n "${PY}" ] || { [ -x "${REPO}/datagen-venv/bin/python" ] && PY="${REPO}/datagen-venv/bin/python"; }
+PY="${PY:-python3}"
 RESULTS="${REPO}/results"
 LOG="${RESULTS}/run.log"
 # Sirius' DuckDB build (for dropping empty parquet part-files its GPU reader
@@ -99,7 +104,8 @@ run_engine(){   # $1=engine  $2=ramdisk_parquet  $3=SF
 # Ensure $DATA_DIR/sf<SF>/parquet exists and is clean external NDS-H; generate it
 # if missing. Echoes the parquet dir on success, empty on failure.
 ensure_dataset(){
-  local sf="$1" out="${DATA_DIR}/sf${sf}" pq="${DATA_DIR}/sf${sf}/parquet"
+  local sf="$1"   # (a single `local` line would expand ${sf} before assigning it)
+  local out="${DATA_DIR}/sf${sf}" pq="${DATA_DIR}/sf${sf}/parquet"
   if [ ! -d "${pq}" ]; then
     local par="${GEN_PARALLEL:-$(( sf * 2 ))}"; [ "${par}" -lt 20 ] && par=20
     local batch="${GEN_BATCH:-25}"
@@ -109,7 +115,7 @@ ensure_dataset(){
       log "    !! generation failed for SF${sf}"; return 1
     fi
   fi
-  if ! python3 "${VALIDATOR}" "${pq}" "${sf}" >>"${LOG}" 2>&1; then
+  if ! "${PY}" "${VALIDATOR}" "${pq}" "${sf}" >>"${LOG}" 2>&1; then
     log "    !! SF${sf} dataset failed validation (not clean external NDS-H — see results/GENERATOR.md)"; return 1
   fi
   echo "${pq}"

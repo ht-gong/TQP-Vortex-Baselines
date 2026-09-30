@@ -7,12 +7,14 @@
 # Defaults point at the SF500 dataset and the generated qualification stream.
 set -euo pipefail
 
-SRC="${1:-/workspace/baseline/results/parquet}"
-STREAM="${2:-/workspace/baseline/results/queries/stream_qualification.sql}"
-RAPIDS_DIR="/workspace/baseline/rapids"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+SRC="${1:-${ROOT}/results/parquet}"
+STREAM="${2:-${ROOT}/results/queries/stream_qualification.sql}"
+RAPIDS_DIR="${ROOT}/rapids"
 RAM_BASE="/dev/shm/tpch_sf500"
 RAM_PQ="${RAM_BASE}/parquet"
-OUT_CSV="/workspace/baseline/results/query_times_gpu.csv"
+OUT_CSV="${ROOT}/results/query_times_gpu.csv"
 DRIVER_MEM="${DRIVER_MEM:-160g}"
 
 source "${RAPIDS_DIR}/activate.sh" >/dev/null 2>&1

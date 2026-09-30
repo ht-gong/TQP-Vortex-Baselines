@@ -33,11 +33,14 @@ sirius:
       downgrade_root_dirs: "/dev/shm/_sirius_spill"
 
   executor:
-    # use_sirius_datasource:false -> kvikio backend (no io_uring). This container's
-    # seccomp blocks io_uring_setup ("uring_reactor: ring init: Operation not
-    # permitted"); kvikio (POSIX/compat mode) avoids it. Single-GPU only, which is
-    # what this baseline uses. uring_n_reactors:0 so no io_uring reactor is created.
-    scan_manager: { num_threads: 16, use_sirius_datasource: false, uring_n_reactors: 1, enable_prefetch_cache: false }
+    # IO backend for parquet scans. use_sirius_datasource:true = Sirius' native
+    # io_uring datasource (upstream default; O_DIRECT reads through pinned bounce
+    # buffers, uring_n_reactors reactor threads -- upstream's SF1000 bench uses 4).
+    # run_sirius.sh probes io_uring at start-up and, where the container blocks
+    # io_uring_setup (the old Vast box did: "uring_reactor: ring init: Operation
+    # not permitted"), rewrites this to false so the kvikio POSIX fallback is
+    # used instead (SIRIUS_IO=kvikio forces that). Single-GPU only either way.
+    scan_manager: { num_threads: 16, use_sirius_datasource: true, uring_n_reactors: 4, enable_prefetch_cache: false }
     pipeline:     { num_threads: 8 }
     downgrade:    { num_threads: 4 }
     task_creator: { num_threads: 2 }

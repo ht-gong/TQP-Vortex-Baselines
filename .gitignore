@@ -27,7 +27,7 @@ docker/data/
 
 # ---- python venvs & caches ----
 polars/.venv/
-polars/.venv-gpu/
+polars/.venv-gpu
 **/__pycache__/
 *.pyc
 
@@ -35,12 +35,16 @@ polars/.venv-gpu/
 rapids/jars/
 rapids/env/
 
-# ---- upstream clones (re-cloneable; URLs documented in READMEs) ----
+# ---- datagen toolchain (datagen/setup_datagen.sh recreates it) ----
+/datagen-venv/
+/datagen/dbgen/
+
+# ---- upstream clones (re-cloneable; pinned in datagen/setup_datagen.sh) ----
 /lancelot/
 /spark-rapids-benchmarks/
 /tpch-kit/
 # the sirius clone + its .pixi build env (setup_sirius.sh recreates it)
-/sirius/sirius/
+/sirius/sirius
 
 # ---- sirius spill scratch ----
 _sirius_spill/
@@ -48,3 +52,11 @@ _sirius_spill/
 # ---- run logs / captures ----
 *.log
 *.out
+
+# symlinks onto the NVMe (see AGENTS.md) and the format-ablation per-run logs
+_polars_scratch_gpu
+/spark-rapids-benchmarks
+results/format_ablation/
+
+# ---- local planning notes (not committed) ----
+/docs/docker_migration_plan.md

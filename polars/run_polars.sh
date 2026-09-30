@@ -9,14 +9,16 @@
 #   run_polars.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 QUERIES="${1:-$(seq 1 22)}"
-DIR="/workspace/baseline/polars"
+DIR="${ROOT}/polars"
 RAM_PQ="${TPCH_PARQUET:-/dev/shm/tpch_sf500/parquet}"
 TPCH_SF="${TPCH_SF:-500}"
 # throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
 OUT_CSV="${OUT_CSV:-/tmp/tpch_polars_cpu_sf${TPCH_SF}.csv}"
-SCRATCH="/workspace/baseline/_polars_scratch"
-LOG="/workspace/baseline/results/polars_run.log"
+SCRATCH="${ROOT}/_polars_scratch"
+LOG="${ROOT}/results/polars_run.log"
 ENGINE="${ENGINE:-streaming}"
 MIN_FREE_GB="${MIN_FREE_GB:-30}"
 
@@ -32,7 +34,7 @@ log "free disk at start: $(free_gb)GB ; ramdisk: $(du -sh ${RAM_PQ%/parquet} 2>/
 
 for q in ${QUERIES}; do
   rm -rf "${SCRATCH:?}"/* 2>/dev/null
-  qlog="/workspace/baseline/results/polars_q${q}.log"
+  qlog="${ROOT}/results/polars_q${q}.log"
   log "=== query ${q} starting (free $(free_gb)GB) ==="
   python "${DIR}/run_tpch_polars.py" "${RAM_PQ}" "${OUT_CSV}" "${q}" append "${ENGINE}" \
     >"${qlog}" 2>&1 &
@@ -63,6 +65,6 @@ log "ALL DONE. free disk: $(free_gb)GB"
 log "results:"; cat "${OUT_CSV}" | tee -a "${LOG}"
 
 if [ "${TPCH_MERGE:-1}" = 1 ]; then
-  python3 /workspace/baseline/merge_results.py polars_cpu "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
+  python3 ${ROOT}/merge_results.py polars_cpu "${TPCH_SF}" "${OUT_CSV}" | tee -a "${LOG}" \
     && rm -f "${OUT_CSV}"
 fi

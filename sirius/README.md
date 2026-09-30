@@ -44,7 +44,7 @@ SF500 parquet (`/dev/shm/tpch_sf500/parquet`, staged by `rapids/nds_h_pipeline.s
 |------|----------|
 | GPU compute capability ≥ 7.5 | RTX 5090 = **12.0** (Blackwell) |
 | CUDA 13.x, driver ≥ 580.65.06 | CUDA 13.0, driver **580.82.09** |
-| glibc ≥ 2.28, `io_uring` enabled | glibc 2.39, `io_uring_disabled=0` |
+| glibc ≥ 2.28, `io_uring` enabled | glibc 2.39, `io_uring_disabled=0`, no seccomp filter → native io_uring datasource in use. Where a container blocks `io_uring_setup`, `run_sirius.sh` auto-falls back to the kvikio POSIX backend (`SIRIUS_IO=kvikio` forces it) |
 | `O_DIRECT`-capable parquet storage | works on **/** and **/dev/shm** |
 
 ## Build

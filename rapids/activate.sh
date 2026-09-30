@@ -1,16 +1,23 @@
 #!/bin/bash
 # Source this to get a ready-to-use spark-rapids shell:
-#   source /workspace/baseline/rapids/activate.sh
-# It activates the conda env, sets JAVA_HOME / SPARK_HOME, and exports
+#   source rapids/activate.sh
+# It activates the Spark env, sets JAVA_HOME / SPARK_HOME, and exports
 # $RAPIDS_JAR and $RAPIDS_CONF plus a `rapids-submit` helper.
+#
+# Two interchangeable envs provide pyspark 3.5.8 + JDK 17: the original conda
+# env at rapids/env (see README), or the repo's datagen-venv (bundled Temurin 17;
+# created by datagen/setup_datagen.sh). Whichever exists is used.
 
-RAPIDS_DIR="/workspace/baseline/rapids"
+RAPIDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Activate the self-contained conda env (Python 3.11 + OpenJDK 17 + pyspark 3.5.8)
-source /opt/miniforge3/etc/profile.d/conda.sh
-conda activate "${RAPIDS_DIR}/env"
-
-export JAVA_HOME="${CONDA_PREFIX}"
+if [ -d "${RAPIDS_DIR}/env" ]; then
+  # Self-contained conda env (Python 3.11 + OpenJDK 17 + pyspark 3.5.8)
+  source /opt/miniforge3/etc/profile.d/conda.sh
+  conda activate "${RAPIDS_DIR}/env"
+  export JAVA_HOME="${CONDA_PREFIX}"
+else
+  source "${RAPIDS_DIR}/../datagen/env.sh"
+fi
 export SPARK_HOME="$(python -c 'import pyspark,os;print(os.path.dirname(pyspark.__file__))')"
 export RAPIDS_JAR="${RAPIDS_DIR}/jars/rapids-4-spark_2.12-26.04.2-cuda12.jar"
 export RAPIDS_CONF="${RAPIDS_DIR}/conf/spark-rapids.conf"

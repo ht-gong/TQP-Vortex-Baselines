@@ -16,8 +16,14 @@ set -euo pipefail
 
 SCALE="${1:?scale}"; PARALLEL="${2:?parallel}"; BATCH="${3:?batch}"; OUT_DIR="${4:?out_dir}"
 
-NDSH_DIR="/workspace/baseline/spark-rapids-benchmarks/nds-h"
-RAPIDS_DIR="/workspace/baseline/rapids"
+# This is the UPSTREAM REFERENCE pipeline: it drives NVIDIA's nds_h_gen_data.py /
+# nds_h_transcode.py from the pinned spark-rapids-benchmarks clone that
+# datagen/setup_datagen.sh installs at the repo root. The in-repo equivalent is
+# datagen/gen_tpch.sh (same CLI); datagen/verify_equivalence.py checks the two
+# produce the same dataset.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+NDSH_DIR="${NDSH_DIR:-${ROOT}/spark-rapids-benchmarks/nds-h}"
+RAPIDS_DIR="${ROOT}/rapids"
 DRIVER_MEM="${DRIVER_MEM:-96g}"
 
 RAW="${OUT_DIR}/_raw"

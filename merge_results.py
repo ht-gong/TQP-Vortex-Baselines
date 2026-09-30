@@ -19,7 +19,8 @@ def main():
     if len(sys.argv) < 4:
         sys.exit("usage: merge_results.py <engine> <scale_factor> <run_csv> [results_dir]")
     engine, sf, run_csv = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-    resdir = sys.argv[4] if len(sys.argv) > 4 else "/workspace/baseline/results"
+    resdir = sys.argv[4] if len(sys.argv) > 4 else os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "results")
     allcsv = os.path.join(resdir, "all_results.csv")
 
     # keep every existing row except this (engine, sf) slice

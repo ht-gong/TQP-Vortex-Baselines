@@ -13,12 +13,23 @@
 #   setup_sirius.sh
 set -euo pipefail
 
-DIR="/workspace/baseline/sirius"
-REPO="${DIR}/sirius"
-# Build only for this box's GPU arch (Blackwell sm_120) to cut CUDA codegen time;
-# the conda libcudf is already multi-arch. Override with CUDAARCHS=... to widen.
-ARCH="${CUDAARCHS:-120a-real;120}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+DIR="${ROOT}/sirius"
+# Clone + pixi env + build (~15 GB). SIRIUS_REPO relocates it (e.g. to a ramdisk
+# when / is tight); sirius/sirius is then a symlink to it.
+REPO="${SIRIUS_REPO:-${DIR}/sirius}"
+# Build only for this box's GPU arch to cut CUDA codegen time (the conda libcudf
+# is already multi-arch): detected from nvidia-smi (H100 -> 90a-real;90,
+# RTX 5090 -> 120a-real;120). Override with CUDAARCHS=... to widen.
+if [ -z "${CUDAARCHS:-}" ]; then
+  CC_="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1 | tr -d '. ')"
+  [ -n "${CC_}" ] || { echo "cannot detect GPU compute capability; set CUDAARCHS" >&2; exit 1; }
+  CUDAARCHS="${CC_}a-real;${CC_}"
+fi
+ARCH="${CUDAARCHS}"
 JOBS="${CMAKE_BUILD_PARALLEL_LEVEL:-64}"
+export PIXI_CACHE_DIR="${PIXI_CACHE_DIR:-${REPO}.pixi-cache}"
 
 echo "=== 1) install pixi (if missing) ==="
 if ! command -v pixi >/dev/null 2>&1 && [ ! -x "${HOME}/.pixi/bin/pixi" ]; then
@@ -28,10 +39,11 @@ export PATH="${HOME}/.pixi/bin:${PATH}"
 pixi --version
 
 echo "=== 2) clone sirius (with submodules) ==="
-mkdir -p "${DIR}"
+mkdir -p "${DIR}" "$(dirname "${REPO}")"
 if [ ! -d "${REPO}/.git" ]; then
   git clone --recurse-submodules https://github.com/sirius-db/sirius.git "${REPO}"
 fi
+[ "${REPO}" = "${DIR}/sirius" ] || ln -sfn "${REPO}" "${DIR}/sirius"
 cd "${REPO}"
 # The experimental starrocks integration is not needed to build Sirius and is
 # large; drop it to save disk if it got pulled by --recurse-submodules.

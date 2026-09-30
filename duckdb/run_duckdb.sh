@@ -28,8 +28,7 @@ WARMUPS="${WARMUPS:-3}"
   "/dev/shm/tpch_sf${TPCH_SF}/parquet" \
   "${ROOT}/duckdb/results/parquet" \
   "${ROOT}/results/parquet" \
-  "/root/tpc-h/sf${TPCH_SF}_parquet" \
-  "/workspace/baseline/results/parquet"; do
+  "/root/tpc-h/sf${TPCH_SF}_parquet"; do
   [ -d "${d}" ] && TPCH_PARQUET="${d}" && break
 done
 
@@ -41,8 +40,14 @@ done
 mkdir -p "$(dirname "${OUT_CSV}")" "$(dirname "${LOG}")"
 rm -f "${OUT_CSV}"
 
-echo "[$(date +%H:%M:%S)] duckdb_cpu SF${TPCH_SF} queries=[${QUERIES}] parquet=${TPCH_PARQUET}" | tee "${LOG}"
-python3 "${ROOT}/duckdb/run_tpch_duckdb.py" \
+# Python with the duckdb module: $PYTHON, else the repo's datagen-venv (has
+# duckdb; datagen/setup_datagen.sh), else whatever python3 is on PATH.
+PY="${PYTHON:-}"
+[ -n "${PY}" ] || { [ -x "${ROOT}/datagen-venv/bin/python" ] && PY="${ROOT}/datagen-venv/bin/python"; }
+PY="${PY:-python3}"
+
+echo "[$(date +%H:%M:%S)] duckdb_cpu SF${TPCH_SF} queries=[${QUERIES}] parquet=${TPCH_PARQUET} python=${PY}" | tee "${LOG}"
+"${PY}" "${ROOT}/duckdb/run_tpch_duckdb.py" \
   "${TPCH_PARQUET}" "${STREAM}" "${OUT_CSV}" "${QUERIES}" "${RUNS}" "${WARMUPS}" 2>&1 | tee -a "${LOG}"
 
 [ -s "${OUT_CSV}" ] || { echo "ERROR: no results produced" >&2; exit 1; }

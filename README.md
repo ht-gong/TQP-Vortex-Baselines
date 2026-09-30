@@ -39,7 +39,7 @@ Default: `30 50 100 300 500 700`.
 | var | meaning |
 |-----|---------|
 | `ENGINES` | space-separated engines, in run order (default above) |
-| `DATA_DIR` | on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `./data`) |
+| `DATA_DIR` | on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `/data/haotiang/parquet-ablation`) |
 | `SHM` | ramdisk root (default `/dev/shm`) |
 | `QUERIES` | query subset (default `1..22`) |
 | `KEEP_RAMDISK=1` | keep the staged ramdisk copy after each SF |
@@ -50,14 +50,16 @@ the individual runners.
 
 ## Data — one generator for every engine
 
-All engines must read byte-identical parquet, and it must come from the **NDS-H**
-generator (official TPC-H dbgen → Spark transcode, writer `parquet-mr`). Never
-point a runner at self-written parquet (DuckDB's own `CALL dbgen` export, cudf
-exports); it is not comparable to the external standard. Generate a dataset with:
+All engines must read byte-identical parquet, and it must come from the repo's
+**NDS-H-equivalent** generator in `datagen/` (TPC-H dbgen → Spark transcode,
+writer `parquet-mr`; a verified re-implementation of NVIDIA's NDS-H pipeline).
+Never point a runner at self-written parquet (DuckDB's own `CALL dbgen` export,
+cudf exports); it is not comparable to the external standard. Generate a dataset with:
 
 ```bash
-rapids/nds_h_pipeline.sh <SF> <PARALLEL> <BATCH> <out_dir>   # -> <out_dir>/parquet/<table>/
-python3 results/validate_dataset.py <parquet_dir> <SF>       # must print VALID
+datagen/setup_datagen.sh                                   # once: dbgen + Spark toolchain
+datagen/gen_tpch.sh <SF> <PARALLEL> <BATCH> <out_dir>      # -> <out_dir>/parquet/<table>/
+python3 results/validate_dataset.py <parquet_dir> <SF>     # must print VALID
 ```
 
 `run.sh` generates missing datasets automatically and validates before every run.
@@ -114,3 +116,6 @@ duckdb -c "SELECT engine,scale_factor,count(*) FILTER(status='OK') ok,
 duckdb -c "PIVOT 'results/all_results.csv'
   ON engine||'_sf'||scale_factor USING first(seconds) GROUP BY query"
 ```
+
+A separate parquet-format ablation (encoding x codec x row order, SF100,
+same rows) lives in `results/FORMAT_ABLATION.md`.

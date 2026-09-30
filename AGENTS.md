@@ -20,7 +20,7 @@ ramdisk copy, then frees the ramdisk. Engines self-merge into
   canonical set `{30,50,100,300,500,700}` (`30-300`). Default `30 50 100 300 500 700`.
 - `ENGINES` — space-separated, in run order. Default `rapids polars_gpu duckdb_cpu sirius`
   (also available: `polars_cpu`).
-- `DATA_DIR` — on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `./data`).
+- `DATA_DIR` — on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `/data/haotiang/parquet-ablation`).
 - `QUERIES`, `SHM`, `KEEP_RAMDISK`, `GEN_PARALLEL`, `GEN_BATCH`, and the usual
   runner passthroughs (`DRIVER_MEM`, `SPARK_SCRATCH`, `GPU_PART_MB`, `MIN_FREE_GB`).
 
@@ -52,20 +52,26 @@ kept; `TPCH_MERGE=0` keeps the temp instead of merging.
 
 ## Data — one generator for every engine
 
-Every engine must run byte-identical parquet, from the **NDS-H** generator
-(official TPC-H dbgen → Spark transcode, writer `parquet-mr`). **Never** point a
-runner at self-written parquet — DuckDB's own `CALL dbgen` export (16-col, no
-trailing `ignore`) or a cudf export — it is not comparable to the external
-standard and gives different query answers.
+Every engine must run byte-identical parquet, from the in-repo generator
+`datagen/gen_tpch.sh` (TPC-H dbgen → Spark transcode, writer `parquet-mr`). It is
+a re-implementation of NVIDIA's NDS-H pipeline, verified equivalent to it
+(`datagen/README.md`); `rapids/nds_h_pipeline.sh` remains only as the upstream
+reference for that verification. **Never** point a runner at self-written
+parquet — DuckDB's own `CALL dbgen` export (16-col, no trailing `ignore`) or a
+cudf export — it is not comparable to the external standard and gives different
+query answers.
 
 ```bash
-rapids/nds_h_pipeline.sh <SF> <PARALLEL> <BATCH> <out_dir>   # -> <out_dir>/parquet/<table>/
-python3 results/validate_dataset.py <parquet_dir> <SF>       # writer, part.p_brand, row counts
+datagen/setup_datagen.sh                                   # once: dbgen + pyspark/JDK venv
+datagen/gen_tpch.sh <SF> <PARALLEL> <BATCH> <out_dir>      # -> <out_dir>/parquet/<table>/
+python3 results/validate_dataset.py <parquet_dir> <SF>     # writer, part.p_brand, row counts
 ```
 
 `run.sh` generates missing datasets and validates before every run; the pipeline
 validates immediately after generation. Full rules and rationale:
-`results/GENERATOR.md`.
+`results/GENERATOR.md`. To re-verify the generator against upstream after
+changing it: `datagen/verify_equivalence.py` (data) and `datagen/verify_engines.sh`
+(engines), protocol in `datagen/README.md`.
 
 ## Results data contract — `results/all_results.csv`
 
@@ -97,6 +103,23 @@ duckdb -c "PIVOT 'results/all_results.csv'
   ON engine||'_sf'||scale_factor USING first(seconds) GROUP BY query"   -- matrix
 ```
 
+## Parquet-format ablation (SF100)
+
+A second experiment, separate from the engine comparison: the **same rows**
+written in 12 parquet formats (encoding x codec, plus key-ordered rows) and
+timed cold on every engine. `results/FORMAT_ABLATION.md` has the design and
+the numbers; `results/format_ablation.csv` is its data (own table, keyed by
+`(engine, scale_factor, variant, round, query)`; do not fold it into
+`all_results.csv`). Tooling: `datagen/gen_format_variants.sh` (variants from one
+dbgen run via `gen_tpch.sh` env `RAW_STORE` / `TRANSCODE_OPTS`),
+`run_format_ablation.sh` (rounds; cold protocol incl. DuckDB `views` mode),
+`merge_format_results.py`, `results/format_ablation_report.py`; per-column size
+analysis: `results/format_ablation_colsizes.{py,csv}`, `results/format_ablation_columns.{py,md}`.
+`results/FORMAT_DECODING.md` answers the follow-up "read less vs decode less"
+questions (dictionary/delta page anatomy, predicate hit rates, zone maps, reader
+microbenchmarks, what Sirius/Simpatico, DuckDB and cuDF do); its tooling is
+`results/format_ablation_pagestats.{py,csv}` and `results/format_ablation_decode.py`.
+
 ## Notes for agents
 
 - Result row counts (`rows_or_error` when `OK`) vary with scale factor but must
@@ -104,6 +127,20 @@ duckdb -c "PIVOT 'results/all_results.csv'
 - Validate any dataset you did not just generate: `results/validate_dataset.py`.
 - Not committed (regenerate): the `sirius/sirius/` clone + `.pixi/` env, python
   venvs, the RAPIDS jar/conda env, and the parquet datasets (all gitignored).
-- Container quirks: `io_uring` is blocked (Sirius uses kvikio, `KVIKIO_COMPAT_MODE=ON`);
-  `run.sh` drops empty 0-row parquet part-files before running (Sirius's GPU
-  reader errors on them).
+  On this box the big engine installs live on the NVMe and are symlinked in:
+  `sirius/sirius -> /data/haotiang/envs/sirius` (built with
+  `SIRIUS_REPO=/data/haotiang/envs/sirius ./sirius/setup_sirius.sh`) and
+  `polars/.venv-gpu -> /data/haotiang/envs/polars-gpu`; datasets are under
+  `/data/haotiang/parquet-ablation`. `/` is nearly full — keep large things off it
+  (`spark-rapids-benchmarks` and `_polars_scratch_gpu` are symlinks onto the NVMe
+  for that reason; dbgen writes via `DSS_PATH` straight into the raw dir, and
+  `SPARK_LOCAL_DIRS` / `SPARK_SCRATCH` should point at the NVMe for big runs).
+- GPUs are shared with other users: pin a free one, e.g. `CUDA_VISIBLE_DEVICES=3`
+  (GPUs 0–2 busy, 6–7 exclusive-mode at the time of writing). Sirius fails at
+  startup if an exclusive-mode GPU is visible.
+- Container quirks: `run_sirius.sh` probes `io_uring` at start-up and uses
+  Sirius's native io_uring datasource where allowed (this box), falling back to
+  the kvikio POSIX backend where the container blocks `io_uring_setup` (the old
+  Vast box; `SIRIUS_IO=kvikio` forces it). `KVIKIO_COMPAT_MODE=ON` stays set for
+  polars_gpu/sirius since cuFile/GDS is unavailable. `run.sh` drops empty 0-row
+  parquet part-files before running (Sirius's GPU reader errors on them).

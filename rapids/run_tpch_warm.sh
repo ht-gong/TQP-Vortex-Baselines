@@ -8,13 +8,15 @@
 #   run_tpch_warm.sh [QUERY_SUBSET]     e.g. "9"  (default: all 22)
 set -uo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 SUBSET="${1:-}"
-RAPIDS_DIR="/workspace/baseline/rapids"
+RAPIDS_DIR="${ROOT}/rapids"
 RAM_PQ="/dev/shm/tpch_sf500/parquet"
-STREAM="/workspace/baseline/results/queries/stream_qualification.sql"
-OUT_CSV="/workspace/baseline/results/query_times_gpu.csv"
-SCRATCH="/workspace/baseline/_spark_scratch"
-LOG="/workspace/baseline/results/warm_run.log"
+STREAM="${ROOT}/results/queries/stream_qualification.sql"
+OUT_CSV="${ROOT}/results/query_times_gpu.csv"
+SCRATCH="${ROOT}/_spark_scratch"
+LOG="${ROOT}/results/warm_run.log"
 
 # --- tunables (iterate here) ---
 DRIVER_MEM="${DRIVER_MEM:-96g}"            # JVM heap (on-heap)
