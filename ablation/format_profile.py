@@ -1,36 +1,44 @@
 #!/usr/bin/env python3
 """Parquet-format profiling pass: per engine, the fastest format for each column.
 
-For one scale factor and a candidate set of encodings x codecs, each candidate
-format is one uniform variant dataset of the same rows, named
-shuffle-<encoding>-<codec> under $DATA_DIR/fmt_sf<SF>/. No TPC-H queries run.
-Instead every engine scans and decodes every column of every variant with one
-column probe, `SELECT min(c), max(c) FROM <table>` (ablation/probe_*.py), and
-the fastest eligible format per (engine, column) wins.
+For one scale factor and a candidate set of encodings x compressions, each
+candidate format is one uniform variant dataset of the same rows, named
+shuffle-<encoding>-<compression> under $DATA_DIR/fmt_sf<SF>/. No TPC-H queries
+run. Instead every engine scans and decodes every column of every variant with
+one column probe, `SELECT min(c), max(c) FROM <table>` (ablation/probe_*.py),
+and the fastest eligible format per (engine, column) wins.
 
-  format_profile.py run    --sf SF [--encodings "plain dict delta"]
-                           [--codecs "snappy zstd lz4raw"] [--rounds 3]
-                           [--engines "rapids polars_gpu duckdb_cpu sirius"]
-                           [--tol 0.05] [--out DIR]
-  format_profile.py select --sf SF [--tol 0.05] [--out DIR]
+  format_profile.py [--sf 5] [--encodings "plain dict delta"]
+                    [--compressions "snappy zstd lz4raw"] [--rounds 3]
+                    [--engines "rapids polars_gpu duckdb_cpu sirius"]
+                    [--tol 0.05] [--out DIR]                (make ablation)
 
-Stages of `run`:
+Stages:
   1. variants   generate the missing ones from one shared dbgen output
                 ($DATA_DIR/fmt_sf<SF>/_rawstore) with datagen/gen_tpch.sh, which
                 validates and publishes each only when complete; existing ones
                 are validated and reused.
-  2. sizes      compressed bytes per column per variant from the parquet footers
-                -> <out>/format_ablation_colsizes.csv
-  3. probes     per round, per variant (staged disk -> ramdisk once), per engine:
+  2. probes     per round, per variant (staged disk -> ramdisk once), per engine:
                 one worker process probes every column in a shuffled order,
                 engine caches off. A probe that fails, times out
-                ($PROBE_TIMEOUT s, default 30 + SF/2) or leaves the engine's native
-                path (FALLBACK) makes that format ineligible for that column
-                on that engine. -> <out>/format_ablation_profile.csv
-  4. select     (also `select` alone) -> <out>/format_map.json and
-                <out>/format_map_sf<SF>.md. Eligible: OK in every round. Score:
-                median seconds over rounds. Formats within TOL of the fastest
-                count as tied and the one with the fewest bytes wins.
+                ($PROBE_TIMEOUT s, default 30 + SF/2) or leaves the engine's
+                native path (FALLBACK) makes that format ineligible for that
+                column on that engine. -> <out>/format_profile.csv
+  3. decide     per engine and column, the format to use -> <out>/format_map.json;
+                prints the results: seconds per engine x format, and the map.
+
+Outputs (the per-round, per-worker probe logs stay in
+<out>/format_profile_logs/, not a result):
+
+  format_profile.csv  one row per (engine, scale_factor, table, column,
+      encoding, compression): status (OK if OK in every round, else the
+      non-OK status, e.g. TIMEOUT), seconds (median over rounds; empty unless
+      OK) and bytes (the column's compressed size in that format). A run
+      replaces the rows of the engines it ran at that SF.
+  format_map.json  {"sf<SF>": {"scale_factor", "tolerance", "engines":
+      {engine: {table: {column: {"encoding", "compression"} | null}}}}}.
+      Eligible: status OK. Formats within TOL of the fastest count as tied
+      and the one with the fewest bytes wins; null = no eligible format.
 
 Env: DATA_DIR (datasets), SCRATCH (engine scratch goes to $SCRATCH/probe),
 SHM (ramdisk root, default /dev/shm), GPU or CUDA_VISIBLE_DEVICES (the one GPU
@@ -62,27 +70,23 @@ ENCODINGS = {  # gen_tpch.py transcode flags per encoding
     "dict": "--dictionary true --writer-version v1",
     "delta": "--dictionary false --writer-version v2",
 }
-CODECS = ["snappy", "zstd", "lz4raw"]
+COMPRESSIONS = ["snappy", "zstd", "lz4raw"]
 ENGINES = ["rapids", "polars_gpu", "duckdb_cpu", "sirius"]
-DEFAULT_FORMAT = "dict-snappy"   # what the generator writes for the benchmark
+DEFAULT = ("dict", "snappy")   # the format the generator writes for the benchmark
 GPU_ENGINES = {"rapids", "polars_gpu", "sirius"}
 
-SIZE_FIELDS = ["scale_factor", "variant", "table", "column", "ptype", "compressed",
-               "uncompressed", "num_values", "encodings"]
-PROFILE_FIELDS = ["engine", "scale_factor", "variant", "encoding", "codec", "round",
-                  "table", "column", "status", "seconds", "detail"]
+PROFILE_CSV = "format_profile.csv"
+MAP_JSON = "format_map.json"
+FIELDS = ["engine", "scale_factor", "table", "column", "encoding", "compression",
+          "status", "seconds", "bytes"]
 
 
 def log(msg):
     print(f"[{time.strftime('%F %T')}] {msg}", flush=True)
 
 
-def variant(enc, codec):
-    return f"shuffle-{enc}-{codec}"
-
-
-def fmt_of(v):
-    return v.split("-", 1)[1]   # shuffle-dict-snappy -> dict-snappy
+def variant(enc, comp):
+    return f"shuffle-{enc}-{comp}"
 
 
 def data_dir():
@@ -92,26 +96,7 @@ def data_dir():
     return d
 
 
-def upsert(path, fields, rows, key, sort_key):
-    """Replace every existing row whose key(row) is among the new rows' keys."""
-    keys = {key(r) for r in rows}
-    old = []
-    if os.path.exists(path):
-        with open(path) as f:
-            rd = csv.DictReader(f)
-            if rd.fieldnames != fields:
-                sys.exit(f"{path}: columns {rd.fieldnames} != {fields}; not merging into it")
-            old = [r for r in rd if key(r) not in keys]
-    allrows = sorted(old + [{k: str(r[k]) for k in fields} for r in rows], key=sort_key)
-    tmp = path + ".tmp"
-    with open(tmp, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        w.writerows(allrows)
-    os.replace(tmp, path)
-
-
-# ------------------------------------------------------------------ 1. variants
+# ------------------------------------------------------------------ variants
 def ensure_variants(sf, variants):
     root = os.path.join(data_dir(), f"fmt_sf{sf}")
     par = int(os.environ.get("GEN_PARALLEL", max(20, 2 * sf)))
@@ -121,10 +106,10 @@ def ensure_variants(sf, variants):
         if os.path.isdir(pqdir):
             log(f"variant {v}: exists")
         else:
-            enc, codec = v.split("-")[1:]
+            enc, comp = v.split("-")[1:]
             log(f"variant {v}: generating (PARALLEL={par} BATCH={batch}, raw store {root}/_rawstore)")
             env = dict(os.environ, RAW_STORE=os.path.join(root, "_rawstore"),
-                       TRANSCODE_OPTS=f"--compression {codec} {ENCODINGS[enc]}")
+                       TRANSCODE_OPTS=f"--compression {comp} {ENCODINGS[enc]}")
             subprocess.run([os.path.join(ROOT, "datagen", "gen_tpch.sh"), str(sf), str(par),
                             str(batch), os.path.join(root, v)], env=env, check=True,
                            stdout=subprocess.DEVNULL)
@@ -135,7 +120,7 @@ def ensure_variants(sf, variants):
     return {v: os.path.join(root, v, "parquet") for v in variants}
 
 
-# ------------------------------------------------------------------ 2. sizes
+# ------------------------------------------------------------------ sizes
 def _table_sizes(job):
     v, pqdir, t = job
     agg = {}
@@ -145,29 +130,49 @@ def _table_sizes(job):
             r = md.row_group(rg)
             for c in range(r.num_columns):
                 cc = r.column(c)
-                d = agg.setdefault(cc.path_in_schema, [0, 0, set(), cc.physical_type, 0])
-                d[0] += cc.total_compressed_size
-                d[1] += cc.total_uncompressed_size
-                d[2].update(cc.encodings)
-                d[4] += cc.num_values
-    return [dict(variant=v, table=t, column=k, ptype=typ, compressed=cb, uncompressed=ub,
-                 num_values=nv, encodings="|".join(sorted(e)))
-            for k, (cb, ub, e, typ, nv) in agg.items()]
+                agg[cc.path_in_schema] = agg.get(cc.path_in_schema, 0) + cc.total_compressed_size
+    return {(v, t, c): b for c, b in agg.items()}
 
 
-def column_sizes(sf, paths, out):
+def column_sizes(paths):
+    """{(variant, table, column): compressed bytes}, from the parquet footers."""
     jobs = [(v, p, t) for v, p in paths.items() for t in TABLES]
-    rows = []
+    sizes = {}
     with ProcessPoolExecutor(min(32, len(jobs))) as ex:
         for part in ex.map(_table_sizes, jobs):
-            rows += [dict(r, scale_factor=sf) for r in part]
-    upsert(os.path.join(out, "format_ablation_colsizes.csv"), SIZE_FIELDS, rows,
-           key=lambda r: (int(r["scale_factor"]), r["variant"]),
-           sort_key=lambda r: (int(r["scale_factor"]), r["variant"], TABLES.index(r["table"]), r["column"]))
-    log(f"column sizes: {len(rows)} rows -> {out}/format_ablation_colsizes.csv")
+            sizes.update(part)
+    return sizes
 
 
-# ------------------------------------------------------------------ 3. probes
+def write_profile(sf, engines, runs, sizes, out):
+    """Rewrite format_profile.csv: the rows of `engines` at `sf` become this
+    run's, aggregated over the rounds probed so far; all other rows stay."""
+    path = os.path.join(out, PROFILE_CSV)
+    rows = []
+    if os.path.exists(path):
+        with open(path) as f:
+            rd = csv.DictReader(f)
+            if rd.fieldnames != FIELDS:
+                sys.exit(f"{path}: columns {rd.fieldnames} != {FIELDS}; not merging into it")
+            rows = [r for r in rd if not (r["engine"] in engines and int(r["scale_factor"]) == sf)]
+    for (e, v, t, c), rs in runs.items():
+        enc, comp = v.split("-")[1:]
+        bad = [st for st, _ in rs if st != "OK"]
+        secs = "" if bad else f"{statistics.median(s for _, s in rs):.4f}"
+        rows.append(dict(engine=e, scale_factor=sf, table=t, column=c, encoding=enc,
+                         compression=comp, status=bad[0] if bad else "OK", seconds=secs,
+                         bytes=sizes[(v, t, c)]))
+    rows.sort(key=lambda r: (ENGINES.index(r["engine"]), int(r["scale_factor"]),
+                             TABLES.index(r["table"]), r["column"],
+                             list(ENCODINGS).index(r["encoding"]), COMPRESSIONS.index(r["compression"])))
+    with open(path + ".tmp", "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    os.replace(path + ".tmp", path)
+
+
+# ------------------------------------------------------------------ probes
 def columns(pqdir):
     cols = []
     for t in TABLES:
@@ -265,7 +270,7 @@ def run_worker(engine, pqdir, cols, run_dir, timeout, env):
     return results
 
 
-def probes(sf, paths, engines, rounds, out, seed):
+def probes(sf, paths, sizes, engines, rounds, out, seed):
     shm = os.environ.get("SHM", "/dev/shm")
     # spark-rapids hangs outright on some delta+zstd reads; a probe normally
     # takes seconds, so the cap stays short and grows with the data.
@@ -279,10 +284,9 @@ def probes(sf, paths, engines, rounds, out, seed):
         sys.exit("set GPU (or CUDA_VISIBLE_DEVICES) to the one free GPU the GPU engines may use")
     if gpu:
         env["CUDA_VISIBLE_DEVICES"] = gpu
-    profile = os.path.join(out, "format_ablation_profile.csv")
+    runs = {}   # (engine, variant, table, column) -> [(status, seconds)] per round
     for rnd in range(1, rounds + 1):
         for v, src in paths.items():
-            enc, codec = v.split("-")[1:]
             t0 = time.time()
             ram, pqdir = stage(src, shm, sf)
             cols = columns(pqdir)
@@ -297,15 +301,9 @@ def probes(sf, paths, engines, rounds, out, seed):
                     env["PROBE_LOG_DIR"] = run_dir
                     t0 = time.time()
                     res = run_worker(e, pqdir, order, run_dir, timeout, env)
-                    rows = [dict(engine=e, scale_factor=sf, variant=v, encoding=enc, codec=codec,
-                                 round=rnd, table=t, column=c, status=st,
-                                 seconds="" if s is None else f"{s:.4f}", detail=d)
-                            for (t, c), (st, s, d) in res.items()]
-                    upsert(profile, PROFILE_FIELDS, rows,
-                           key=lambda r: (r["engine"], int(r["scale_factor"]), r["variant"], int(r["round"])),
-                           sort_key=lambda r: (ENGINES.index(r["engine"]) if r["engine"] in ENGINES else 99,
-                                               int(r["scale_factor"]), r["variant"], int(r["round"]),
-                                               TABLES.index(r["table"]), r["column"]))
+                    for (t, c), (st, s, _) in res.items():
+                        runs.setdefault((e, v, t, c), []).append((st, s))
+                    write_profile(sf, engines, runs, sizes, out)
                     bad = {}
                     for st, _, _ in res.values():
                         if st != "OK":
@@ -316,150 +314,88 @@ def probes(sf, paths, engines, rounds, out, seed):
                 shutil.rmtree(ram, ignore_errors=True)
 
 
-# ------------------------------------------------------------------ 4. select
-def select(sf, tol, out):
-    with open(os.path.join(out, "format_ablation_profile.csv")) as f:
-        prof = [r for r in csv.DictReader(f) if int(r["scale_factor"]) == sf]
-    with open(os.path.join(out, "format_ablation_colsizes.csv")) as f:
-        size = {(r["variant"], r["table"], r["column"]): int(r["compressed"])
-                for r in csv.DictReader(f) if int(r["scale_factor"]) == sf}
-    if not prof:
-        sys.exit(f"no SF{sf} rows in {out}/format_ablation_profile.csv")
-    # (engine, table.column, format) -> list of (status, seconds) over rounds
-    runs = {}
-    for r in prof:
-        k = (r["engine"], f"{r['table']}.{r['column']}", fmt_of(r["variant"]))
-        runs.setdefault(k, []).append((r["status"], float(r["seconds"]) if r["seconds"] else None))
-    engines = [e for e in ENGINES if any(k[0] == e for k in runs)] + \
-              sorted({k[0] for k in runs} - set(ENGINES))
-    formats = sorted({k[2] for k in runs})
-    cols = sorted({k[1] for k in runs}, key=lambda c: (TABLES.index(c.split(".")[0]), c))
-    rounds = sorted({int(r["round"]) for r in prof})
+# ------------------------------------------------------------------ decide
+def decide(sf, tol, out):
+    with open(os.path.join(out, PROFILE_CSV)) as f:
+        rows = [r for r in csv.DictReader(f) if int(r["scale_factor"]) == sf]
+    engines = [e for e in ENGINES if any(r["engine"] == e for r in rows)]
+    cols = sorted({(r["table"], r["column"]) for r in rows}, key=lambda tc: (TABLES.index(tc[0]), tc[1]))
+    fmts = sorted({(r["encoding"], r["compression"]) for r in rows},
+                  key=lambda f: (list(ENCODINGS).index(f[0]), COMPRESSIONS.index(f[1])))
+    ok = {}   # (engine, table, column) -> {(encoding, compression): (seconds, bytes)}
+    for r in rows:
+        if r["status"] == "OK":
+            ok.setdefault((r["engine"], r["table"], r["column"]), {})[
+                (r["encoding"], r["compression"])] = (float(r["seconds"]), int(r["bytes"]))
 
-    def nbytes(col, fmt):
-        t, c = col.split(".")
-        return size.get((f"shuffle-{fmt}", t, c))
-
-    score = {}   # (engine, col, fmt) -> median seconds, eligible only
-    for (e, col, fmt), rs in runs.items():
-        if rs and all(st == "OK" for st, _ in rs):
-            score[(e, col, fmt)] = statistics.median(s for _, s in rs)
-
-    fmap, report = {}, []
+    picks = {}   # (engine, table, column) -> (encoding, compression) | None
     for e in engines:
-        fmap[e] = {}
-        for col in cols:
-            elig = {fmt: score[(e, col, fmt)] for fmt in formats if (e, col, fmt) in score}
-            if not elig:
-                fmap[e][col] = None
-                continue
-            best = min(elig.values())
-            tied = [f for f, s in elig.items() if s <= best * (1 + tol)]
-            pick = min(tied, key=lambda f: (nbytes(col, f) if nbytes(col, f) is not None else 1 << 62,
-                                             elig[f], f))
-            enc, codec = pick.split("-")
-            fmap[e][col] = dict(format=pick, encoding=enc, codec=codec, seconds=round(elig[pick], 4),
-                                bytes=nbytes(col, pick), eligible=len(elig), tied=len(tied))
-
-    doc = {}
-    path = os.path.join(out, "format_map.json")
-    if os.path.exists(path):
-        with open(path) as f:
-            doc = json.load(f)
-    doc[f"sf{sf}"] = dict(scale_factor=sf, tolerance=tol, rounds=rounds, formats=formats,
-                          default_format=DEFAULT_FORMAT, engines=fmap)
-    with open(path + ".tmp", "w") as f:
-        json.dump(doc, f, indent=1, sort_keys=True)
-    os.replace(path + ".tmp", path)
-
-    # ---- report
-    report += [f"# Format map, SF{sf}", "",
-               f"Per-engine, per-column parquet format from `ablation/format_profile.py`: "
-               f"one `SELECT min(c), max(c)` probe per (engine, column, format, round), "
-               f"rounds {rounds}, candidate formats {', '.join(formats)}. A format is "
-               f"eligible for a column when its probe was OK in every round; the score is "
-               f"the median seconds; formats within {tol:.0%} of the fastest are tied and "
-               f"the fewest compressed bytes wins.", "",
-               "**Limit:** each choice is a per-column optimum measured in isolation, not a "
-               "tested dataset. The pinned writer (parquet-mr via Spark 3.5.8) sets "
-               "dictionary encoding per column, but codec and page version (v1/v2, which "
-               "selects delta) apply to the whole file, so an arbitrary map cannot be "
-               "written as one dataset with it.", ""]
-    report += ["## Summary", "",
-               "Summed probe seconds over all columns: the map vs the default format "
-               f"(`{DEFAULT_FORMAT}`) and vs the best single uniform format. The map's sum "
-               "is optimistic: each column takes the minimum of several noisy medians, so "
-               "part of its lead over a uniform format is selection noise.", "",
-               "| engine | map s | default s | best uniform | uniform s | columns ≠ default | no eligible format |",
-               "|---|---:|---:|---|---:|---:|---:|"]
-    for e in engines:
-        m = fmap[e]
-        chosen = sum(v["seconds"] for v in m.values() if v)
-        missing = sum(1 for v in m.values() if v is None)
-        uni = {fmt: sum(score[(e, c, fmt)] for c in cols) for fmt in formats
-               if all((e, c, fmt) in score for c in cols)}
-        default = f"{uni[DEFAULT_FORMAT]:.2f}" if DEFAULT_FORMAT in uni else "n/a"
-        bu = min(uni, key=uni.get) if uni else None
-        diff = sum(1 for v in m.values() if v and v["format"] != DEFAULT_FORMAT)
-        report.append(f"| {e} | {chosen:.2f} | {default} | {bu or 'none'} | "
-                      f"{uni[bu]:.2f} | {diff} | {missing} |" if bu else
-                      f"| {e} | {chosen:.2f} | {default} | none | n/a | {diff} | {missing} |")
-    bad = [r for r in prof if r["status"] != "OK"]
-    if bad:
-        report += ["", "## Ineligible probes", "",
-                   "| engine | format | column | round | status | detail |", "|---|---|---|---:|---|---|"]
-        for r in bad:
-            report.append(f"| {r['engine']} | {fmt_of(r['variant'])} | {r['table']}.{r['column']} | "
-                          f"{r['round']} | {r['status']} | {r['detail'][:80]} |")
-    for e in engines:
-        report += ["", f"## {e}", "", "| column | format | median s | bytes | tied | default s |",
-                   "|---|---|---:|---:|---:|---:|"]
-        for col in cols:
-            v = fmap[e][col]
-            d = score.get((e, col, DEFAULT_FORMAT))
-            ds = f"{d:.4f}" if d is not None else "n/a"
-            if v is None:
-                report.append(f"| {col} | **none eligible** | | | | {ds} |")
+        for t, c in cols:
+            elig = ok.get((e, t, c), {})
+            if elig:
+                best = min(s for s, _ in elig.values())
+                tied = [f for f, (s, _) in elig.items() if s <= best * (1 + tol)]
+                picks[(e, t, c)] = min(tied, key=lambda f: (elig[f][1], elig[f][0], f))
             else:
-                report.append(f"| {col} | {v['format']} | {v['seconds']:.4f} | {v['bytes']} | "
-                              f"{v['tied']}/{v['eligible']} | {ds} |")
-    md = os.path.join(out, f"format_map_sf{sf}.md")
-    with open(md, "w") as f:
-        f.write("\n".join(report) + "\n")
-    missing = {e: sum(1 for v in fmap[e].values() if v is None) for e in engines}
-    log(f"format map -> {path} (sf{sf}), report -> {md}; columns without an eligible format: {missing}")
+                picks[(e, t, c)] = None
+    decisions = {}
+    for (e, t, c), f in picks.items():
+        decisions.setdefault(e, {}).setdefault(t, {})[c] = (
+            None if f is None else {"encoding": f[0], "compression": f[1]})
+    mpath = os.path.join(out, MAP_JSON)
+    doc = {}
+    if os.path.exists(mpath):
+        with open(mpath) as f:
+            doc = json.load(f)
+    doc[f"sf{sf}"] = dict(scale_factor=sf, tolerance=tol, engines=decisions)
+    with open(mpath + ".tmp", "w") as f:
+        json.dump(doc, f, indent=1)
+    os.replace(mpath + ".tmp", mpath)
+
+    # The results: per engine, the probe seconds summed over all columns for
+    # each uniform format (n/a: not OK on every column), then the map's.
+    log(f"results SF{sf} -> {out}/{PROFILE_CSV}, {mpath}")
+    print(f"  {f'seconds summed over {len(cols)} columns':34s}" + "".join(f"{e:>12s}" for e in engines))
+    for f in fmts:
+        cells = []
+        for e in engines:
+            col_s = [ok.get((e, t, c), {}).get(f) for t, c in cols]
+            cells.append(f"{sum(x[0] for x in col_s):12.2f}" if all(col_s) else f"{'n/a':>12s}")
+        print(f"  {'-'.join(f):34s}" + "".join(cells))
+    mine = {e: [picks[(e, t, c)] for t, c in cols] for e in engines}
+    print(f"  {'format map':34s}" + "".join(
+        f"{sum(ok[(e, t, c)][picks[(e, t, c)]][0] for t, c in cols if picks[(e, t, c)]):12.2f}"
+        for e in engines))
+    print(f"  {'map columns != ' + '-'.join(DEFAULT):34s}" + "".join(
+        f"{sum(1 for f in mine[e] if f and f != DEFAULT):12d}" for e in engines))
+    print(f"  {'map columns with no OK format':34s}" + "".join(
+        f"{sum(1 for f in mine[e] if f is None):12d}" for e in engines), flush=True)
 
 
 def main():
     # SIGTERM -> SystemExit, so a stopped pass still kills its worker and ramdisk copy
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = p.add_subparsers(dest="cmd", required=True)
-    for name in ("run", "select"):
-        s = sub.add_parser(name)
-        s.add_argument("--sf", type=int, required=True)
-        s.add_argument("--tol", type=float, default=0.05)
-        s.add_argument("--out", default=os.path.join(ROOT, "results"))
-        if name == "run":
-            s.add_argument("--encodings", default="plain dict delta")
-            s.add_argument("--codecs", default="snappy zstd lz4raw")
-            s.add_argument("--rounds", type=int, default=3)
-            s.add_argument("--engines", default=" ".join(ENGINES))
-            s.add_argument("--seed", default="0", help="column-order shuffle seed")
+    p.add_argument("--sf", type=int, default=5)
+    p.add_argument("--encodings", default="plain dict delta")
+    p.add_argument("--compressions", default="snappy zstd lz4raw")
+    p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--engines", default=" ".join(ENGINES))
+    p.add_argument("--tol", type=float, default=0.05)
+    p.add_argument("--out", default=os.path.join(ROOT, "results"))
+    p.add_argument("--seed", default="0", help="column-order shuffle seed")
     a = p.parse_args()
+    encs, comps, engines = a.encodings.split(), a.compressions.split(), a.engines.split()
+    bad = [x for x in encs if x not in ENCODINGS] + [x for x in comps if x not in COMPRESSIONS] + \
+          [x for x in engines if x not in ENGINES]
+    if bad:
+        sys.exit(f"unknown encoding/compression/engine: {bad}")
     os.makedirs(a.out, exist_ok=True)
-    if a.cmd == "run":
-        encs, codecs, engines = a.encodings.split(), a.codecs.split(), a.engines.split()
-        bad = [x for x in encs if x not in ENCODINGS] + [x for x in codecs if x not in CODECS] + \
-              [x for x in engines if x not in ENGINES]
-        if bad:
-            sys.exit(f"unknown encoding/codec/engine: {bad}")
-        variants = [variant(e, c) for e in encs for c in codecs]
-        log(f"format profile SF{a.sf}: variants {variants}, engines {engines}, rounds {a.rounds} -> {a.out}")
-        paths = ensure_variants(a.sf, variants)
-        column_sizes(a.sf, paths, a.out)
-        probes(a.sf, paths, engines, a.rounds, a.out, a.seed)
-    select(a.sf, a.tol, a.out)
+    variants = [variant(e, c) for e in encs for c in comps]
+    log(f"format profile SF{a.sf}: variants {variants}, engines {engines}, rounds {a.rounds} -> {a.out}")
+    paths = ensure_variants(a.sf, variants)
+    probes(a.sf, paths, column_sizes(paths), engines, a.rounds, a.out, a.seed)
+    decide(a.sf, a.tol, a.out)
 
 
 if __name__ == "__main__":

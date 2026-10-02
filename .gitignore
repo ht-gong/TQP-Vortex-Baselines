@@ -4,9 +4,10 @@ dpfproto/logs/
 
 .venv/
 
-# ---- benchmark intermediates: results/all_results.csv is the ONLY kept results
-# file; every per-run / per-SF / detail CSV is a throwaway (runners merge into
-# all_results.csv via merge_results.py and delete their temp).
+# ---- benchmark intermediates: results/all_results.csv is the ONLY kept TPC-H
+# results file; every per-run / per-SF / detail CSV is a throwaway (runners merge
+# into all_results.csv via merge_results.py and delete their temp). The format
+# profiling pass keeps results/format_profile.csv and results/format_map.json.
 results/query_times_*.csv
 results/*_logs/
 **/_raw/
@@ -41,10 +42,9 @@ _sirius_spill/
 *.log
 *.out
 
-# symlink onto the NVMe (see AGENTS.md), the old format-ablation per-run logs,
-# and the format profiling pass's per-worker logs
+# symlink onto the NVMe (see AGENTS.md) and the format profiling pass's
+# per-worker logs
 _polars_scratch_gpu
-results/format_ablation/
 results/format_profile_logs/
 
 # ---- box-specific settings for make / docker/run.sh (copy local.env.example) ----

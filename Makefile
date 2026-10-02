@@ -9,22 +9,25 @@
 #   make pth SF=1                              export $DATA_DIR/sf1 as TQP-Vortex .pth files
 #   make bench SF=100 [ENGINES="..."]          TPC-H q1-22 -> results/all_results.csv
 #   make smoke                                 SF1, all engines, nothing merged
-#   make ablation SF=100 [ENCODINGS= CODECS= ROUNDS= ENGINES= OUT=]
-#                                              format profiling pass -> per-column format map
-#   make format-map SF=100 [TOL=0.05 OUT=]     re-run only the map selection
+#   make ablation [SF=5 ENCODINGS= COMPRESSIONS= ROUNDS= ENGINES= TOL= OUT=]
+#                                              format profiling pass -> format_profile.csv,
+#                                              format_map.json, results table on stdout
 #   make summary                               pivots of results/all_results.csv
 #   make shell                                 a shell in the container
 
 RUN := docker/run.sh
 ENCODINGS ?= plain dict delta
-CODECS ?= snappy zstd lz4raw
+COMPRESSIONS ?= snappy zstd lz4raw
 ROUNDS ?= 3
 TOL ?= 0.05
 OUT ?= results
+# The format profiling pass runs at SF5 unless SF is given; the other SF
+# targets require it.
+ablation: SF ?= 5
 
 need = $(if $($(1)),,$(error $(1) is required, e.g. `make $@ $(1)=$(2)`))
 
-.PHONY: image shell doctor data validate pth bench smoke ablation format-map summary
+.PHONY: image shell doctor data validate pth bench smoke ablation summary
 
 image:
 	$(RUN) build
@@ -55,14 +58,9 @@ smoke:
 	$(RUN) bash -c 'RUN_CSV_DIR="$$SCRATCH/smoke" ./run.sh 1'
 
 ablation:
-	$(call need,SF,100)
-	$(RUN) bash -c '"$$PY" ablation/format_profile.py run --sf $(SF) --encodings "$(ENCODINGS)" \
-	  --codecs "$(CODECS)" --rounds $(ROUNDS) --tol $(TOL) --out "$(OUT)" \
+	$(RUN) bash -c '"$$PY" ablation/format_profile.py --sf $(SF) --encodings "$(ENCODINGS)" \
+	  --compressions "$(COMPRESSIONS)" --rounds $(ROUNDS) --tol $(TOL) --out "$(OUT)" \
 	  $${ENGINES:+--engines "$$ENGINES"}'
-
-format-map:
-	$(call need,SF,100)
-	$(RUN) bash -c '"$$PY" ablation/format_profile.py select --sf $(SF) --tol $(TOL) --out "$(OUT)"'
 
 summary:
 	$(RUN) bash -c '"$$PY" results/summary.py'

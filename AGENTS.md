@@ -18,8 +18,7 @@ make image && make doctor            # once per pin change; doctor checks GPU, i
 make data SF=100                     # generate (if missing) + validate $DATA_DIR/sf100
 make bench SF="100 300" [ENGINES="rapids sirius"] [QUERIES="1 6"]
 make smoke                           # SF1, all engines, nothing merged; fails unless 22/22 everywhere
-make ablation SF=100 ENCODINGS="plain dict delta" CODECS="snappy zstd lz4raw" [ROUNDS=3] [OUT=dir]
-make format-map SF=100 [TOL=0.05]
+make ablation [SF=5] [ENCODINGS="plain dict delta"] [COMPRESSIONS="snappy zstd lz4raw"] [ROUNDS=3] [TOL=0.05] [OUT=dir]
 make pth SF=1                        # TQP-Vortex .pth export
 make summary                         # pivots of all_results.csv
 make shell                           # interactive shell in the container
@@ -106,26 +105,29 @@ sirius,500,query9,FAIL,259.488,INTERNAL Error: ... GPU pipeline task exceeded ma
 ## Parquet-format profiling pass
 
 A second experiment, separate from the engine comparison: which parquet format
-(encoding × codec) each engine scans and decodes fastest, per column.
-`make ablation` (`ablation/format_profile.py run`) builds one uniform variant
-dataset per format (`$DATA_DIR/fmt_sf<SF>/shuffle-<enc>-<codec>/`, same rows,
-from one dbgen run via `gen_tpch.sh`'s `RAW_STORE` / `TRANSCODE_OPTS`), then
-times one `SELECT min(c), max(c)` probe per (engine, column, format, round), no
-TPC-H: one worker per (engine, variant, round) probes every column in shuffled
-order after untimed priming, engine caches off, CPU fallback recorded as
-`FALLBACK`, hangs as `TIMEOUT` (worker restarted). It writes
-`format_ablation_colsizes.csv` (keyed by `scale_factor, variant`),
-`format_ablation_profile.csv`, `format_map.json` (per SF: the fastest eligible
-format per engine and column; ties within `TOL` go to the smaller format) and
-`format_map_sf<SF>.md`. `make format-map` re-runs only the selection.
+(encoding × compression) each engine scans and decodes fastest, per column.
+`make ablation` (`ablation/format_profile.py`) builds one uniform variant
+dataset per format (`$DATA_DIR/fmt_sf<SF>/shuffle-<encoding>-<compression>/`,
+same rows, from one dbgen run via `gen_tpch.sh`'s `RAW_STORE` /
+`TRANSCODE_OPTS`), then times one `SELECT min(c), max(c)` probe per (engine,
+column, format, round), no TPC-H: one worker per (engine, variant, round) probes
+every column in shuffled order after untimed priming, engine caches off, CPU
+fallback recorded as `FALLBACK`, hangs as `TIMEOUT` (worker restarted). `SF`
+defaults to 5. It writes two files to `OUT` (default `results/`):
 
-The earlier 22-query SF100 ablation (12 variants incl. key-ordered rows) is
-retired; its data and write-ups stay as results: `results/format_ablation.csv`
-(keyed by `(engine, scale_factor, variant, round, query)`; do not fold it into
-`all_results.csv`), `results/FORMAT_ABLATION.md`, `results/FORMAT_DECODING.md`,
-`results/format_ablation_{report,columns}.md`,
-`results/format_ablation_{colsizes,pagestats}.csv`. The scripts those write-ups
-cite were removed.
+- `format_profile.csv` — one row per `(engine, scale_factor, table, column,
+  encoding, compression)`: `status` (`OK` if OK in every round, else the non-OK
+  status), `seconds` (median over rounds; empty unless OK), `bytes` (the
+  column's compressed size in that format). A run replaces the rows of the
+  engines it ran at that SF.
+- `format_map.json` — the decision: `{"sf<SF>": {"scale_factor", "tolerance",
+  "engines": {engine: {table: {column: {"encoding", "compression"} | null}}}}}`.
+  Fastest OK format per engine and column; formats within `TOL` of it are tied
+  and the fewest bytes wins.
+
+It ends by printing the results: per engine, the probe seconds summed over all
+columns for each format, and the map's.
+Per-round, per-worker probe logs stay in `OUT/format_profile_logs/` (gitignored).
 
 ## Notes for agents
 

@@ -28,8 +28,7 @@ changes need no rebuild. The image tag is a hash of `versions.env`,
 | `make validate SF=100` | validate `$DATA_DIR/sf100` |
 | `make bench SF=100 [ENGINES="…"]` | TPC-H q1–22 on every engine → `results/all_results.csv` |
 | `make smoke` | SF1, all engines, nothing merged; prints a query × engine table, fails unless every query is OK |
-| `make ablation SF=100 [ENCODINGS=… CODECS=… ROUNDS=3 ENGINES=… OUT=results]` | parquet-format profiling pass → per-engine, per-column format map |
-| `make format-map SF=100 [TOL=0.05]` | re-run only the map selection |
+| `make ablation [SF=5 ENCODINGS=… COMPRESSIONS=… ROUNDS=3 ENGINES=… TOL=0.05 OUT=results]` | parquet-format profiling pass → `format_profile.csv` (times) + `format_map.json` (decision); prints the results table |
 | `make pth SF=1` | export `$DATA_DIR/sf1` as TQP-Vortex `.pth` column files in `$DATA_DIR/pth` |
 | `make summary` | pivots of `results/all_results.csv` |
 
@@ -72,8 +71,9 @@ with `TQP_DATA_DIR=$DATA_DIR/pth`.
 
 ## Results — `results/all_results.csv`
 
-The single canonical results file (the only results CSV kept — everything else is
-a throwaway). One row per `(engine, scale_factor, query)`. Each runner writes a
+The single canonical TPC-H results file (the only TPC-H results CSV kept —
+everything else is a throwaway; the format profiling pass keeps its own two
+files, below). One row per `(engine, scale_factor, query)`. Each runner writes a
 temp CSV and upserts its slice via `merge_results.py <engine> <sf> <run_csv>`;
 every other view (summary, matrices, per-engine scaling) is a pivot of this file
 (`make summary`). Do **not** add parallel summary CSVs; pivot this instead.
@@ -97,14 +97,16 @@ rapids,100,query1,OK,2.308,4
 
 ## Parquet-format profiling pass
 
-`make ablation SF=… ENCODINGS=… CODECS=…` answers which parquet format each
-engine scans and decodes fastest, per column: one uniform variant dataset per
-encoding × codec (same rows, `$DATA_DIR/fmt_sf<SF>/shuffle-<enc>-<codec>`), one
+`make ablation [SF=5 ENCODINGS=… COMPRESSIONS=…]` answers which parquet format
+each engine scans and decodes fastest, per column: one uniform variant dataset
+per encoding × compression (same rows,
+`$DATA_DIR/fmt_sf<SF>/shuffle-<encoding>-<compression>`), one
 `SELECT min(c), max(c)` probe per (engine, column, format, round), no TPC-H
-queries. It writes `format_ablation_colsizes.csv`, `format_ablation_profile.csv`,
-`format_map.json` and `format_map_sf<SF>.md` to `OUT` (see
-`ablation/format_profile.py`). The earlier 22-query SF100 ablation and its data
-are in `results/FORMAT_ABLATION.md`.
+queries. It writes two files to `OUT`: `format_profile.csv` (per engine, column
+and encoding × compression: status, median seconds over rounds, compressed
+bytes) and `format_map.json` (per engine and column: the chosen encoding and
+compression). Schemas in `AGENTS.md` and `ablation/format_profile.py`. `SF`
+defaults to 5.
 
 ## Versions
 
