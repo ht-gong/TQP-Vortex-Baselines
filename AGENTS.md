@@ -56,6 +56,10 @@ measures — not one cold process per query. Its `seconds` are therefore **warm*
 unlike every other engine's, and are a lower bound in any cross-engine comparison.
 `RUNS=1 WARMUPS=0` gives cold, comparable numbers. Details in `duckdb/README.md`.
 
+`sirius` reads the ramdisk parquet through views in every query and must not use
+`pin_table`: a pin decodes the parquet into cuDF columns in pinned memory, so the
+parquet format would no longer reach query time (`sirius/README.md`).
+
 Runners read the same `results/queries/stream_qualification.sql`, take
 `TPCH_PARQUET` / `TPCH_SF`, write a throwaway temp CSV, then fold their 22 rows
 into `results/all_results.csv` via `merge_results.py <engine> <sf> <run_csv>` (an
@@ -150,6 +154,13 @@ Per-round, per-worker probe logs stay in `OUT/format_profile_logs/` (gitignored)
   `/dev/shm` the host's ramdisk. `KVIKIO_COMPAT_MODE=ON` stays set for
   polars_gpu/sirius since cuFile/GDS is unavailable. `run.sh` drops empty 0-row
   parquet part-files from the ramdisk copy (Sirius's GPU reader errors on them).
+- NUMA: with a GPU, `docker/run.sh` binds the whole container to the GPU's NUMA
+  node (`--cpuset-cpus`/`--cpuset-mems`): every engine thread, every pinned host
+  pool and the ramdisk copy (tmpfs pages go to the writer's node) are local to
+  the GPU, and Spark `local[*]`, Polars and DuckDB size their thread pools from
+  the bound CPUs (104 here). `--cap-add SYS_NICE` lets Sirius `mbind` its pinned
+  pool (Docker's seccomp profile blocks `mbind` without it). `NUMA=off` unbinds;
+  `make doctor` checks both. On this box GPUs 0-3 are on node 0, 4-7 on node 1.
 - On this box: `/` is nearly full, so datasets and scratch live on the NVMe
   (`DATA_DIR=/data/haotiang/parquet-ablation`); Docker's data root is on the NVMe too.
 - `dpfproto/` (GOLAP/DPFProto notes, a git submodule) is separate and not wired

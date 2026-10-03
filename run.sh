@@ -53,7 +53,18 @@ RUN_CSV_DIR="${RUN_CSV_DIR:-}"
 
 : > "${LOG}"
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "${LOG}"; }
-shm_free_gb(){ df -k --output=avail "${SHM}" | tail -1 | awk '{print int($1/1024/1024)}'; }
+# Free ramdisk in GB. When the container is bound to one NUMA node
+# (docker/run.sh), the copy can only use that node's memory: its free memory plus
+# reclaimable page cache, if that is less than /dev/shm's own free space.
+shm_free_gb(){
+  local shm mems node
+  shm="$(df -k --output=avail "${SHM}" | tail -1 | awk '{print int($1/1024/1024)}')"
+  mems="$(sed -n 's/^Mems_allowed_list:\s*//p' /proc/self/status)"
+  case "${mems}" in *[,-]*) echo "${shm}"; return ;; esac
+  node="$(awk '/MemFree:/{f=$4} /FilePages:/{p=$4} /Shmem:/{s=$4} END{print int((f+p-s)/1024/1024)}' \
+            "/sys/devices/system/node/node${mems}/meminfo")"
+  echo $(( node < shm ? node : shm ))
+}
 
 # Expand SF_SPEC tokens: a bare number is itself; "A-B" expands to the canonical
 # scale factors within [A,B].
@@ -122,7 +133,7 @@ for SF in ${SFS}; do
   RAM_DIR="${SHM}/tpch_sf${SF}"; RAM_PQ="${RAM_DIR}/parquet"
   rm -rf "${RAM_DIR}"
   if [ "$(shm_free_gb)" -lt "${need}" ]; then
-    log "    !! not enough ramdisk (need ~${need}GB, free $(shm_free_gb)GB) -> skipping SF${SF}"; continue
+    log "    !! not enough ramdisk on the GPU's NUMA node (need ~${need}GB, free $(shm_free_gb)GB) -> skipping SF${SF}"; continue
   fi
   log "    staging ${DISK_PQ} -> ${RAM_PQ} ..."
   mkdir -p "${RAM_DIR}"

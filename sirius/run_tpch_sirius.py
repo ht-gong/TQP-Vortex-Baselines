@@ -61,8 +61,8 @@ TABLES = ["customer", "lineitem", "nation", "orders",
 ITER_MARK = "__SIRIUS_ITER__"
 RUN_TIME_RE = re.compile(r"Run Time \(s\): real ([0-9]+\.[0-9]+)")
 # stderr noise that must not be miscounted as CSV result rows. `mbind: Operation
-# not permitted` is emitted whenever Sirius grows a NUMA-pinned host pool (this
-# container blocks the mbind syscall) -- harmless, but it can appear mid-query.
+# not permitted` is emitted whenever Sirius grows a NUMA-pinned host pool in a
+# container without CAP_SYS_NICE (docker/run.sh grants it; `make doctor` checks).
 NOISE_RE = re.compile(r"mbind:|Operation not permitted|terminate called|what\(\):|^\[[0-9]{4}-|^\s*$")
 
 

@@ -16,14 +16,15 @@ make doctor                      # versions, GPU, io_uring, free space
 Needs Docker with the NVIDIA Container Toolkit and an NVIDIA driver for CUDA 13.
 The image holds the environments only; the repo is bind-mounted, so code
 changes need no rebuild. The image tag is a hash of `versions.env`,
-`docker/*.lock` and `docker/Dockerfile`.
+`docker/*.lock` and `docker/Dockerfile`. A container with a GPU runs on that
+GPU's NUMA node only (its CPUs and memory; `NUMA=off` to unbind).
 
 ## Targets
 
 | target | does |
 |--------|------|
 | `make image` / `make shell` | build the image / a shell in the container |
-| `make doctor` | check versions against the pins, that the GPU is idle and not exclusive-mode, that io_uring works, free space |
+| `make doctor` | check versions against the pins, that the GPU is idle and not exclusive-mode, that the container is bound to the GPU's NUMA node, that io_uring works, free space |
 | `make data SF=100` | generate `$DATA_DIR/sf100` if missing, then validate it |
 | `make validate SF=100` | validate `$DATA_DIR/sf100` |
 | `make bench SF=100 [ENGINES="…"]` | TPC-H q1–22 on every engine → `results/all_results.csv` |

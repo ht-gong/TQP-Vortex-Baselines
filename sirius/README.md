@@ -75,6 +75,11 @@ and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
   cold parquet scan); iteration 1 = **warm** (Sirius scan cache).
 - Single GPU (`topology.num_gpus: 1`) to match `rapids` (`local[*]`, one GPU) and
   `polars` (`device 0`).
+- **No `pin_table`.** Sirius can pin tables in pinned host or GPU memory, but a pin
+  decodes the parquet (cuDF's GPU reader) into plain cuDF columns, so the parquet
+  format would no longer reach query time. The runner and the format probes
+  therefore read the ramdisk parquet in every query, as the other engines do.
+  Sirius's pinned host pools are still used for its own transfers and spill.
 
 ## Tuning knobs
 

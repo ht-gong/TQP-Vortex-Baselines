@@ -40,6 +40,25 @@ else
              --format=csv,noheader,nounits)
 fi
 
+echo "numa"
+cpus="$(sed -n 's/^Cpus_allowed_list:\s*//p' /proc/self/status)"
+mems="$(sed -n 's/^Mems_allowed_list:\s*//p' /proc/self/status)"
+bus="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i 0 2>/dev/null)"
+node="$(cat "/sys/bus/pci/devices/$(echo "${bus: -12}" | tr A-Z a-z)/numa_node" 2>/dev/null || echo -1)"
+if [ -z "${bus}" ] || [ "${node}" -lt 0 ]; then warn numa "GPU NUMA node unknown; CPUs ${cpus}, memory nodes ${mems}"
+elif [ "${NUMA:-auto}" = off ]; then warn numa "unbound (NUMA=off): CPUs ${cpus}, memory nodes ${mems}; the GPU is on node ${node}"
+elif [ "${mems}" = "${node}" ] && [ "${cpus}" = "$(cat "/sys/devices/system/node/node${node}/cpulist")" ]; then
+  ok numa "bound to the GPU's node ${node}: CPUs ${cpus}, memory node ${mems}"
+else bad numa "the GPU is on node ${node}, but the container has CPUs ${cpus}, memory nodes ${mems}"; fi
+if python3 - "$((node < 0 ? 0 : node))" <<'PY'
+import ctypes, sys
+libc = ctypes.CDLL(None, use_errno=True)
+mask = ctypes.c_ulong(1 << int(sys.argv[1]))
+sys.exit(0 if libc.syscall(238, 2, ctypes.byref(mask), 64) == 0 else 1)   # set_mempolicy(MPOL_BIND)
+PY
+then ok mbind "allowed: NUMA-aware engines (Sirius) can bind their pinned memory"
+else bad mbind "blocked: Sirius cannot bind its pinned pool to the GPU's node (needs --cap-add SYS_NICE)"; fi
+
 echo "io"
 if python3 - <<'PY'
 import ctypes, sys

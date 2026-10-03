@@ -8,11 +8,20 @@
 # The image tag is a hash of versions.env, docker/*.lock and the Dockerfile, so
 # a pin change always gets a new image. Box-specific settings come from the
 # environment or else local.env (see local.env.example): DATA_DIR, SCRATCH,
-# SHM, GPU.
+# SHM, GPU, NUMA.
 #
 # Run flags:
 #   --gpus device=$GPU     one GPU (GPUs are shared; Sirius fails at startup if
 #                          an exclusive-mode GPU is visible). Inside, it is GPU 0.
+#   --cpuset-cpus/-mems    the container runs on the GPU's NUMA node only: its
+#                          CPUs and its memory. Every engine thread, every pinned
+#                          host pool and the ramdisk copy (tmpfs pages are
+#                          allocated by the writer) are local to the GPU, and the
+#                          engines size their thread pools from the bound CPUs.
+#                          NUMA=off (with a GPU) or no GPU: unbound.
+#   --cap-add SYS_NICE     lets NUMA-aware engines bind their own memory (Sirius
+#                          mbinds its pinned pool); Docker's seccomp profile
+#                          allows mbind/set_mempolicy only with this capability
 #   --ipc=host             /dev/shm is the host's, so ramdisk staging (SF500 is
 #                          ~180 GB) behaves as on the host
 #   --security-opt seccomp=docker/seccomp-iouring.json
@@ -58,19 +67,29 @@ passwd="${SCRATCH}/home/.passwd"
 printf 'root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n%s:x:%s:%s::%s:/bin/bash\n' \
   "$(id -un)" "$(id -u)" "$(id -g)" "${SCRATCH}/home" > "${passwd}"
 
-opts=(--rm --init --ipc=host --ulimit memlock=-1
+opts=(--rm --init --ipc=host --ulimit memlock=-1 --cap-add SYS_NICE
       --security-opt "seccomp=${REPO}/docker/seccomp-iouring.json"
       --user "$(id -u):$(id -g)" -e HOME="${SCRATCH}/home" -v "${passwd}:/etc/passwd:ro"
       -v "${REPO}:${REPO}" -v "${DATA_DIR}:${DATA_DIR}" -v "${SCRATCH}:${SCRATCH}" -w "${REPO}"
       -e DATA_DIR -e SCRATCH -e SHM="${SHM}")
 if [ -n "${GPU:-}" ]; then
   opts+=(--gpus "device=${GPU}" -e CUDA_VISIBLE_DEVICES=0)
+  if [ "${NUMA:-auto}" != off ]; then
+    # The GPU's NUMA node from its PCI device (nvidia-smi: 00000000:85:00.0,
+    # sysfs: 0000:85:00.0); -1 when the box reports none.
+    bus="$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "${GPU}")"
+    bus="${bus: -12}"
+    node="$(cat "/sys/bus/pci/devices/${bus,,}/numa_node")"
+    if [ "${node}" -ge 0 ]; then
+      opts+=(--cpuset-cpus "$(cat "/sys/devices/system/node/node${node}/cpulist")" --cpuset-mems "${node}")
+    fi
+  fi
 fi
 [ -t 0 ] && [ -t 1 ] && opts+=(-it)
 # Settings the targets and runners read, forwarded when set.
 for v in SF ENGINES QUERIES KEEP_RAMDISK GEN_PARALLEL GEN_BATCH DRIVER_MEM GPU_PART_MB MIN_FREE_GB \
          QUERY_TIMEOUT SIRIUS_TIMEOUT SIRIUS_ITERS SIRIUS_IO PROBE_TIMEOUT TPCH_MERGE RUNS WARMUPS \
-         DUCKDB_LOAD_MODE DUCKDB_THREADS DUCKDB_MEMORY_LIMIT DUCKDB_TEMP_DIR RUN_CSV_DIR; do
+         DUCKDB_LOAD_MODE DUCKDB_THREADS DUCKDB_MEMORY_LIMIT DUCKDB_TEMP_DIR RUN_CSV_DIR NUMA; do
   [ -z "${!v+x}" ] || opts+=(-e "${v}")
 done
 [ $# -gt 0 ] || set -- bash
