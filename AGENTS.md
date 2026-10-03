@@ -50,15 +50,17 @@ Nothing in the scripts names a box-specific path.
 Engine settings shared by a runner and the format probes live in
 `rapids/activate.sh` (`rapids_run_args`), `polars/env.sh`, `sirius/env.sh`.
 
-`duckdb_cpu` is the **odd one out on protocol**: a single process loads the
-dataset into in-memory tables once (load excluded from timing), then prewarms and
-measures — not one cold process per query. Its `seconds` are therefore **warm**,
-unlike every other engine's, and are a lower bound in any cross-engine comparison.
-`RUNS=1 WARMUPS=0` gives cold, comparable numbers. Details in `duckdb/README.md`.
+**Every engine reads the ramdisk parquet in every query; none loads tables into
+memory.** DuckDB and Sirius use views over `read_parquet()` (DuckDB's external
+file cache off, Sirius's prefetch cache off), RAPIDS temp views over
+`spark.read.parquet`, Polars `scan_parquet`. Sirius must not use `pin_table`: a
+pin decodes the parquet into cuDF columns in pinned memory, so the parquet format
+would no longer reach query time (`sirius/README.md`). DuckDB's in-memory
+`tables` mode was removed.
 
-`sirius` reads the ramdisk parquet through views in every query and must not use
-`pin_table`: a pin decodes the parquet into cuDF columns in pinned memory, so the
-parquet format would no longer reach query time (`sirius/README.md`).
+`duckdb_cpu` still differs on protocol: one process runs every query after three
+prewarm passes (which also read the ramdisk), not one process per query.
+`RUNS=1 WARMUPS=0` gives a single cold pass. Details in `duckdb/README.md`.
 
 Runners read the same `results/queries/stream_qualification.sql`, take
 `TPCH_PARQUET` / `TPCH_SF`, write a throwaway temp CSV, then fold their 22 rows

@@ -3,16 +3,12 @@
 
 DuckDB CPU baseline over the shared TPC-H parquet dataset.
 
-Load modes (DUCKDB_LOAD_MODE):
-  tables (default) -- CREATE TABLE AS SELECT from parquet, so the whole dataset
-                      is resident in memory before timing starts; load time is
-                      excluded from per-query seconds. Needs RAM >= dataset.
-  views            -- CREATE VIEW over read_parquet(); parquet scan cost is
-                      included in every query's time.
+Every table is a view over read_parquet() of the ramdisk copy, and DuckDB's
+external file cache is off, so every query reads and decodes its parquet from
+the ramdisk; nothing is loaded into memory ahead of the timed run.
 
-Timing follows the repo results contract (see AGENTS.md): one cold measured run
-per query by default (RUNS=1, WARMUPS=0), engine startup and load excluded. With
-RUNS>1 the reported seconds is the median of the measured runs.
+One measured run per query by default (RUNS=1, WARMUPS=0), engine startup
+excluded. With RUNS>1 the reported seconds is the median of the measured runs.
 
 Emits the merge_results.py input schema -- `query,status,seconds,
 result_rows_or_error`, one row per query -- so run_duckdb.sh can fold it into
@@ -31,20 +27,6 @@ import duckdb
 TABLES = ["region", "nation", "supplier", "customer",
           "part", "partsupp", "orders", "lineitem"]
 
-# TPC-H primary keys, applied after load in `tables` mode only when DUCKDB_PK=1.
-# Off by default: the ART index build on lineitem (3B rows at SF500) costs a lot
-# of time and memory, and no TPC-H query plan uses these indexes for its joins.
-PRIMARY_KEYS = {
-    "region": "r_regionkey",
-    "nation": "n_nationkey",
-    "part": "p_partkey",
-    "supplier": "s_suppkey",
-    "customer": "c_custkey",
-    "orders": "o_orderkey",
-    "partsupp": "ps_partkey, ps_suppkey",
-    "lineitem": "l_orderkey, l_linenumber",
-}
-
 
 def parse_stream(path):
     # split qgen stream
@@ -57,25 +39,11 @@ def parse_stream(path):
         }
 
 
-def load_dataset(con, parquet, mode, with_pk):
-    """Materialise the parquet dataset as in-memory tables, or as views."""
+def create_views(con, parquet):
+    """One view per table over read_parquet() of the parquet dataset."""
     base = parquet.rstrip("/")
     for t in TABLES:
-        glob = f"{base}/{t}/*.parquet"
-        t0 = time.time()
-        if mode == "views":
-            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{glob}')")
-            print(f"  view {t}", flush=True)
-        else:
-            con.execute(f"CREATE TABLE {t} AS SELECT * FROM parquet_scan('{glob}')")
-            n = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            print(f"  loaded {t:9s} {n:>13,} rows  {time.time() - t0:7.1f}s", flush=True)
-
-    if mode == "tables" and with_pk:
-        for t in TABLES:
-            t0 = time.time()
-            con.execute(f"ALTER TABLE {t} ADD PRIMARY KEY ({PRIMARY_KEYS[t]})")
-            print(f"  pk {t:9s} {time.time() - t0:7.1f}s", flush=True)
+        con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{base}/{t}/*.parquet')")
 
 
 def connect():
@@ -91,6 +59,9 @@ def connect():
         con.execute(f"PRAGMA memory_limit='{mem}'")
     if os.environ.get("DUCKDB_TEMP_DIR"):
         con.execute(f"PRAGMA temp_directory='{os.environ['DUCKDB_TEMP_DIR']}'")
+    # no in-memory copy of parquet file bytes across queries: every query reads
+    # the ramdisk
+    con.execute("SET enable_external_file_cache = false")
     return con, threads
 
 
@@ -117,17 +88,12 @@ def main():
     runs = int(sys.argv[5]) if len(sys.argv) > 5 else int(os.environ.get("RUNS", "1"))
     warmups = int(sys.argv[6]) if len(sys.argv) > 6 else int(os.environ.get("WARMUPS", "0"))
     sf = os.environ.get("TPCH_SF", "500")
-    mode = os.environ.get("DUCKDB_LOAD_MODE", "tables")
-    with_pk = os.environ.get("DUCKDB_PK", "0") == "1"
 
     con, threads = connect()
 
-    print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} mode={mode} "
-          f"pk={with_pk} runs={runs} warmups={warmups}", flush=True)
-    print(f"loading {parquet} ...", flush=True)
-    t0 = time.time()
-    load_dataset(con, parquet, mode, with_pk)
-    print(f"load complete in {time.time() - t0:.1f}s (excluded from query times)", flush=True)
+    print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} views over {parquet} "
+          f"runs={runs} warmups={warmups}", flush=True)
+    create_views(con, parquet)
 
     queries = parse_stream(stream)
     with open(out_csv, "w", newline="") as f:

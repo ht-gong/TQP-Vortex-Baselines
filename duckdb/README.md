@@ -25,27 +25,21 @@ deletes its temp CSV — no per-run/per-SF CSVs, same as the other engines.
 
 Mirrors the local `test.py` flow this baseline came from.
 
-- **Load mode** (`DUCKDB_LOAD_MODE`, default `tables`): the dataset is
-  materialised into in-memory DuckDB tables (`CREATE TABLE AS SELECT` from
-  parquet), then queries run against resident data. **Load time is excluded**
-  from the per-query seconds. Requires RAM ≥ dataset; at SF500 the tables are
-  ~800 GB resident.
-  - `DUCKDB_LOAD_MODE=views` instead creates views over `read_parquet()`, so
-    parquet scan cost lands inside every query — use this to compare against
-    engines that stream from parquet.
-- **Primary keys** (`DUCKDB_PK`, default `0` = off): no PK/ART indexes are
-  built. No TPC-H query plan uses them for its joins, and at SF500 the lineitem
-  index build costs substantial time and memory for no query benefit. Set
-  `DUCKDB_PK=1` to restore them.
+- **Data:** every table is a view over `read_parquet()` of the ramdisk copy, and
+  DuckDB's external file cache is off, so every run reads and decodes its parquet
+  from the ramdisk, like the GPU engines. Nothing is loaded into memory ahead of
+  a query (no in-memory tables; that mode was removed).
 - **Timing** (default `WARMUPS=3 RUNS=1`): three prewarm passes over the query
-  set, then one measured run each — the `test.py` protocol. `RUNS>1` reports the
-  median of the measured runs.
+  set, then one measured run each, all in one process — the `test.py` protocol.
+  `RUNS>1` reports the median of the measured runs.
 
-⚠️ **These seconds are WARM.** The `seconds` contract in `AGENTS.md` is cold, and
-that is how the `sirius` / `polars_gpu` / `rapids` rows were produced.
-`duckdb_cpu` numbers are therefore a lower bound relative to the other engines in
-the same table — do not read a gap to another engine as pure engine speed.
-`RUNS=1 WARMUPS=0` produces cold, directly comparable numbers.
+⚠️ **The process is warm.** The GPU engines start one process per query;
+`duckdb_cpu` runs every query in one process after three prewarm passes (which
+read the ramdisk too; no data stays cached). `RUNS=1 WARMUPS=0` gives a single
+cold pass.
+
+Rows in `all_results.csv` from before this change were measured on in-memory
+tables (`tables` mode) and are not comparable to new runs.
 
 Other env knobs: `DUCKDB_THREADS` (defaults to the process CPU affinity, not the
 whole box), `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIR` (spill location), `STREAM`.

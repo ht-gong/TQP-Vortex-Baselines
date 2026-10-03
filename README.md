@@ -53,9 +53,9 @@ then frees the ramdisk. Each engine folds its 22 rows into
 | `duckdb_cpu` | DuckDB 1.5.5 (CPU) | `duckdb/` |
 | `sirius` | Sirius (GPU-native SQL, DuckDB 1.5.5 extension, libcudf 26.08) | `sirius/` |
 
-`duckdb_cpu` loads the dataset into memory once and times warm runs by default;
-its `seconds` are a lower bound next to the other engines' cold runs
-(`duckdb/README.md`).
+Every engine reads the ramdisk parquet in every query; none loads tables into
+memory first. `duckdb_cpu` runs all queries in one process after prewarm passes,
+where the GPU engines start one process per query (`duckdb/README.md`).
 
 ## Data — one generator for every engine
 
