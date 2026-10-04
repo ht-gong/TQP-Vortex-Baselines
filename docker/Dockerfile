@@ -1,107 +1,138 @@
-# syntax=docker/dockerfile:1
-##############################################################################
-# TPC-H GPU benchmark image: Spark + RAPIDS Accelerator, GPU Polars (cudf-
-# polars), and the NDS-H (TPC-H) data + query generator -- all in one image.
+# The one environment every workflow runs in: the datagen toolchain and all four
+# engines (rapids, polars_gpu, duckdb_cpu, sirius). Every version comes from
+# versions.env (passed as build args by docker/run.sh) and docker/*.lock.
+# The image holds environments only, under /opt/envs; the repo is bind-mounted
+# at runtime, so code changes need no rebuild. Build with `make image`.
 #
-# Reproduces the versions validated on RTX 5090 (Blackwell sm_120):
-#   Spark 3.5.8 | rapids-4-spark 26.04.2 (cuda12) | cudf-polars-cu12 26.6
-#   OpenJDK 17  | tpch-kit + NVIDIA spark-rapids-benchmarks (NDS-H)
-#
-# Build:  docker build -t tpch-gpu .
-# Run:    needs the NVIDIA Container Toolkit on the host (`--gpus all`).
-#         See README.md / run.sh.
-##############################################################################
+# No CUDA base image: each engine brings its own CUDA user space (the RAPIDS jar
+# bundles cuDF, the cudf-polars wheels bundle libcudf, the Sirius pixi env brings
+# CUDA 13.3); the NVIDIA container runtime injects the driver.
+ARG UBUNTU_IMAGE
 
-# ----------------------------------------------------------------------------
-# Stage 1 -- builder: compile tpch-kit dbgen/qgen with the SPARK profile via
-# the NVIDIA NDS-H tpch-gen Makefile (adds LIMIT + "-- Template file:" markers).
-# ----------------------------------------------------------------------------
-FROM ubuntu:22.04 AS gen-builder
+# ------------------------------------------------------------------ base
+# apt packages come from the UBUNTU_SNAPSHOT archive snapshot, which is served
+# over https only. The bare image has no CA bundle, so `certs` fetches one from
+# the live archive; it is mounted only while apt downloads (package integrity
+# is checked by apt's signatures either way), and the pinned ca-certificates
+# package is what the image keeps.
+FROM ${UBUNTU_IMAGE} AS certs
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
-ARG TPCH_KIT_REF=master
-ARG BENCH_REF=main
-ENV DEBIAN_FRONTEND=noninteractive
+FROM ${UBUNTU_IMAGE} AS base
+ARG UBUNTU_SNAPSHOT
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+RUN --mount=type=bind,from=certs,source=/etc/ssl/certs/ca-certificates.crt,target=/tmp/boot-ca.crt \
+    apt-get -o Acquire::https::CaInfo=/tmp/boot-ca.crt update --snapshot "${UBUNTU_SNAPSHOT}" \
+ && apt-get -o Acquire::https::CaInfo=/tmp/boot-ca.crt install -y --no-install-recommends \
+      --snapshot "${UBUNTU_SNAPSHOT}" ca-certificates curl python3 python3-venv procps \
+ && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential gcc make git dos2unix ca-certificates \
-        openjdk-17-jdk-headless maven \
-    && rm -rf /var/lib/apt/lists/*
+# build-only tools
+FROM base AS build
+ARG UBUNTU_SNAPSHOT
+RUN apt-get update --snapshot "${UBUNTU_SNAPSHOT}" \
+ && apt-get install -y --no-install-recommends --snapshot "${UBUNTU_SNAPSHOT}" git build-essential \
+ && rm -rf /var/lib/apt/lists/*
 
-# tpch-kit provides the canonical dbgen/qgen sources (TPCH_HOME).
-RUN git clone --depth 1 -b ${TPCH_KIT_REF} https://github.com/gregrahn/tpch-kit.git /opt/tpch-kit
-# NVIDIA spark-rapids-benchmarks ships the NDS-H wrappers + the tpch-gen build
-# that patches dbgen/qgen for Spark-compatible SQL.
-RUN git clone --depth 1 -b ${BENCH_REF} https://github.com/NVIDIA/spark-rapids-benchmarks.git /opt/spark-rapids-benchmarks
+# ------------------------------------------------------------------ jdk
+FROM base AS jdk
+ARG JDK_URL
+ARG JDK_SHA256
+RUN curl -fsSL -o /tmp/jdk.tgz "${JDK_URL}" \
+ && echo "${JDK_SHA256}  /tmp/jdk.tgz" | sha256sum -c - \
+ && mkdir -p /opt/envs/jdk && tar xzf /tmp/jdk.tgz -C /opt/envs/jdk --strip-components=1 \
+ && rm /tmp/jdk.tgz
 
-# Build dbgen + qgen (SPARK profile) and the helper jar.
-ENV TPCH_HOME=/opt/tpch-kit
-RUN cd /opt/spark-rapids-benchmarks/nds-h/tpch-gen && make \
-    && test -x target/dbgen/dbgen && test -x target/dbgen/qgen \
-    && echo "dbgen/qgen built OK"
+# ------------------------------------------------------------------ py
+# pyspark (datagen transcode, RAPIDS driver), pyarrow, duckdb (duckdb_cpu),
+# torch CPU (datagen/export_pth.py).
+FROM base AS py
+COPY docker/py.lock /tmp/py.lock
+RUN python3 -m venv /opt/envs/py \
+ && /opt/envs/py/bin/pip install --no-cache-dir --disable-pip-version-check --require-hashes --no-deps \
+      --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/py.lock
 
-# ----------------------------------------------------------------------------
-# Stage 2 -- runtime: CUDA runtime base (driver injected at run time by the
-# NVIDIA Container Toolkit). Both engines bring their own CUDA libs (the rapids
-# jar bundles cuDF; cudf-polars wheels bundle libcudf), so only libcuda is
-# needed from the host.
-# ----------------------------------------------------------------------------
-FROM nvidia/cuda:12.9.1-runtime-ubuntu22.04 AS runtime
+# ------------------------------------------------------------------ dbgen
+# TPC-H dbgen 2.17.3, built the way the NDS-H tpch-gen Makefile builds it:
+# MACHINE=LINUX DATABASE=SPARK WORKLOAD=TPCH, with the SPARK profile defines
+# added to tpcd.h (anchored on MAX_VARS; upstream inserts them by line number
+# into the official toolkit's tpcd.h). The defines shape qgen output only.
+FROM build AS dbgen
+ARG TPCH_KIT_URL
+ARG TPCH_KIT_REF
+RUN git clone -q "${TPCH_KIT_URL}" /tmp/tpch-kit \
+ && git -C /tmp/tpch-kit checkout -q "${TPCH_KIT_REF}" \
+ && cp -r /tmp/tpch-kit/dbgen /opt/dbgen && rm -rf /tmp/tpch-kit \
+ && cd /opt/dbgen \
+ && sed -i '/^#define MAX_VARS/i #ifdef SPARK\n#define GEN_QUERY_PLAN  ""\n#define START_TRAN      ""\n#define END_TRAN        ""\n#define SET_OUTPUT      ""\n#define SET_ROWCOUNT    "LIMIT %d"\n#define SET_DBASE       ""\n#endif\n' tpcd.h \
+ && make -s MACHINE=LINUX DATABASE=SPARK WORKLOAD=TPCH dbgen \
+ && mkdir -p /opt/envs/dbgen && cp dbgen dists.dss /opt/envs/dbgen/
 
-ARG SPARK_VERSION=3.5.8
-ARG RAPIDS_VERSION=26.04.2
-ARG CUDF_POLARS_VERSION=26.6.0
-ENV DEBIAN_FRONTEND=noninteractive
+# ------------------------------------------------------------------ rapids-jar
+FROM base AS rapids-jar
+ARG RAPIDS_JAR_NAME
+ARG RAPIDS_JAR_URL
+ARG RAPIDS_JAR_SHA1
+RUN mkdir -p /opt/envs/jars \
+ && curl -fsSL -o "/opt/envs/jars/${RAPIDS_JAR_NAME}" "${RAPIDS_JAR_URL}" \
+ && echo "${RAPIDS_JAR_SHA1}  /opt/envs/jars/${RAPIDS_JAR_NAME}" | sha1sum -c -
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        openjdk-17-jre-headless python3 python3-venv python3-pip \
-        curl ca-certificates procps libgomp1 tzdata \
-    && rm -rf /var/lib/apt/lists/*
+# ------------------------------------------------------------------ polars
+FROM base AS polars
+COPY docker/polars.lock /tmp/polars.lock
+RUN python3 -m venv /opt/envs/polars \
+ && /opt/envs/polars/bin/pip install --no-cache-dir --disable-pip-version-check --require-hashes --no-deps \
+      --extra-index-url https://pypi.nvidia.com -r /tmp/polars.lock
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+# ------------------------------------------------------------------ sirius-build
+# Sirius at the pinned commit with its submodules (minus the unused
+# experimental/starrocks ones), its toolchain from its own pixi.lock (--frozen),
+# `make` as upstream documents, for H100 only. The binary's RPATH points at the
+# env's lib dir, so the final stage keeps that dir at the same path.
+FROM build AS sirius-build
+ARG PIXI_URL
+ARG PIXI_SHA256
+ARG SIRIUS_URL
+ARG SIRIUS_REF
+ARG SIRIUS_CUDAARCHS
+RUN curl -fsSL -o /tmp/pixi.tgz "${PIXI_URL}" \
+ && echo "${PIXI_SHA256}  /tmp/pixi.tgz" | sha256sum -c - \
+ && tar xzf /tmp/pixi.tgz -C /usr/local/bin pixi && rm /tmp/pixi.tgz
+RUN git clone -q "${SIRIUS_URL}" /opt/envs/sirius \
+ && cd /opt/envs/sirius && git checkout -q "${SIRIUS_REF}" \
+ && git submodule update --init --recursive -- \
+      $(git config -f .gitmodules --get-regexp '\.path$' | awk '{print $2}' | grep -v '^experimental/')
+WORKDIR /opt/envs/sirius
+RUN --mount=type=cache,target=/root/.cache pixi install --frozen
+RUN --mount=type=cache,target=/root/.cache \
+    pixi run --frozen bash -c "export CUDAARCHS='${SIRIUS_CUDAARCHS}'; CMAKE_BUILD_PARALLEL_LEVEL=\$(nproc) make" \
+ && test -x build/release/duckdb
+# Runtime subset of the env: shared libs (some are symlinks into targets/).
+RUN E=/opt/envs/sirius/.pixi/envs/default \
+ && mkdir -p /opt/sirius-rt/targets/x86_64-linux \
+ && cp -a "$E/lib" /opt/sirius-rt/lib \
+ && rm -rf /opt/sirius-rt/lib/rustlib /opt/sirius-rt/lib/python3* \
+ && find /opt/sirius-rt/lib -name '*.a' -delete \
+ && cp -a "$E/targets/x86_64-linux/lib" /opt/sirius-rt/targets/x86_64-linux/lib
 
-# --- Apache Spark --------------------------------------------------------------
-RUN curl -fsSL "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop3.tgz" \
-      -o /tmp/spark.tgz \
-    && mkdir -p /opt/spark \
-    && tar -xzf /tmp/spark.tgz -C /opt/spark --strip-components=1 \
-    && rm /tmp/spark.tgz
-ENV SPARK_HOME=/opt/spark
-ENV PATH=/opt/spark/bin:/opt/spark/sbin:${PATH}
-
-# --- RAPIDS Accelerator for Spark jar -----------------------------------------
-RUN mkdir -p /opt/rapids \
-    && curl -fsSL "https://repo1.maven.org/maven2/com/nvidia/rapids-4-spark_2.12/${RAPIDS_VERSION}/rapids-4-spark_2.12-${RAPIDS_VERSION}-cuda12.jar" \
-       -o /opt/rapids/rapids-4-spark.jar \
-    && test -s /opt/rapids/rapids-4-spark.jar
-ENV RAPIDS_JAR=/opt/rapids/rapids-4-spark.jar
-
-# --- Python venvs -------------------------------------------------------------
-# venv-spark: pyspark (Spark-RAPIDS driver + NDS-H transcode).
-RUN python3 -m venv /opt/venv-spark \
-    && /opt/venv-spark/bin/pip install --no-cache-dir \
-        "pyspark==${SPARK_VERSION}" pyarrow pandas numpy
-# venv-polars: GPU Polars via cudf-polars (pulls its own polars + libcudf).
-RUN python3 -m venv /opt/venv-polars \
-    && /opt/venv-polars/bin/pip install --no-cache-dir \
-        --extra-index-url https://pypi.nvidia.com \
-        "cudf-polars-cu12==${CUDF_POLARS_VERSION}" pyarrow
-
-# --- Generator artifacts (dbgen/qgen + NDS-H wrappers) ------------------------
-COPY --from=gen-builder /opt/spark-rapids-benchmarks /opt/spark-rapids-benchmarks
-ENV NDSH_DIR=/opt/spark-rapids-benchmarks/nds-h
-
-# --- App + orchestration scripts ----------------------------------------------
-COPY app/    /opt/baseline/app/
-COPY scripts/ /opt/baseline/scripts/
-RUN chmod +x /opt/baseline/scripts/*.sh
-
-# Defaults; override at run time. /data is the mount point for the dataset +
-# results so they persist outside the container.
-ENV DATA_DIR=/data \
-    SCALE=10 \
-    PYTHONUNBUFFERED=1
-WORKDIR /opt/baseline
-VOLUME ["/data"]
-
-ENTRYPOINT ["/opt/baseline/scripts/entrypoint.sh"]
-CMD ["help"]
+# ------------------------------------------------------------------ final
+FROM base AS final
+ARG RAPIDS_JAR_NAME
+COPY --from=jdk /opt/envs/jdk /opt/envs/jdk
+COPY --from=py /opt/envs/py /opt/envs/py
+COPY --from=polars /opt/envs/polars /opt/envs/polars
+COPY --from=dbgen /opt/envs/dbgen /opt/envs/dbgen
+COPY --from=rapids-jar /opt/envs/jars /opt/envs/jars
+COPY --from=sirius-build /opt/sirius-rt/lib /opt/envs/sirius/.pixi/envs/default/lib
+COPY --from=sirius-build /opt/sirius-rt/targets /opt/envs/sirius/.pixi/envs/default/targets
+COPY --from=sirius-build /opt/envs/sirius/build/release/duckdb /opt/envs/sirius/build/release/duckdb
+COPY versions.env docker/py.lock docker/polars.lock /opt/envs/pins/
+ENV PY=/opt/envs/py/bin/python \
+    POLARS_PY=/opt/envs/polars/bin/python \
+    JAVA_HOME=/opt/envs/jdk \
+    SPARK_HOME=/opt/envs/py/lib/python3.12/site-packages/pyspark \
+    RAPIDS_JAR=/opt/envs/jars/${RAPIDS_JAR_NAME} \
+    SIRIUS_DUCKDB=/opt/envs/sirius/build/release/duckdb \
+    SIRIUS_ENVLIB=/opt/envs/sirius/.pixi/envs/default/lib \
+    DBGEN_DIR=/opt/envs/dbgen \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility

@@ -1,7 +1,7 @@
 # DuckDB CPU Baseline
 
 `duckdb_cpu` — DuckDB as the CPU reference point against the GPU engines
-(Sirius, Polars-GPU, Spark-RAPIDS) and Polars-CPU. Same TPC-H parquet dataset,
+(Sirius, Polars-GPU, Spark-RAPIDS). Same TPC-H parquet dataset,
 same `results/queries/stream_qualification.sql`, same results contract as every
 other engine in this repo (see `AGENTS.md`).
 
@@ -23,29 +23,17 @@ deletes its temp CSV — no per-run/per-SF CSVs, same as the other engines.
 
 ## Measurement protocol
 
-Mirrors the local `test.py` flow this baseline came from.
+- **Data:** every table is a view over `read_parquet()` of the ramdisk copy, and
+  DuckDB's external file cache is off, so every run reads and decodes its parquet
+  from the ramdisk, like the GPU engines. Nothing is loaded into memory ahead of
+  a query (no in-memory tables; that mode was removed).
+- **Timing:** the protocol of every engine (`AGENTS.md`). `run_duckdb.sh` starts
+  one process per query; it first runs the query on the SF1 ramdisk copy
+  (`WARM_PARQUET`), untimed, then once on the target dataset, timed.
 
-- **Load mode** (`DUCKDB_LOAD_MODE`, default `tables`): the dataset is
-  materialised into in-memory DuckDB tables (`CREATE TABLE AS SELECT` from
-  parquet), then queries run against resident data. **Load time is excluded**
-  from the per-query seconds. Requires RAM ≥ dataset; at SF500 the tables are
-  ~800 GB resident.
-  - `DUCKDB_LOAD_MODE=views` instead creates views over `read_parquet()`, so
-    parquet scan cost lands inside every query — use this to compare against
-    engines that stream from parquet.
-- **Primary keys** (`DUCKDB_PK`, default `0` = off): no PK/ART indexes are
-  built. No TPC-H query plan uses them for its joins, and at SF500 the lineitem
-  index build costs substantial time and memory for no query benefit. Set
-  `DUCKDB_PK=1` to restore them.
-- **Timing** (default `WARMUPS=3 RUNS=1`): three prewarm passes over the query
-  set, then one measured run each — the `test.py` protocol. `RUNS>1` reports the
-  median of the measured runs.
-
-⚠️ **These seconds are WARM.** The `seconds` contract in `AGENTS.md` is cold, and
-that is how `polars_cpu` / `sirius` / `polars_gpu` / `rapids` rows were produced.
-`duckdb_cpu` numbers are therefore a lower bound relative to the other engines in
-the same table — do not read a `duckdb_cpu` vs `polars_cpu` gap as pure engine
-speed. `RUNS=1 WARMUPS=0` produces cold, directly comparable numbers.
+Rows in `all_results.csv` from before these changes were measured on in-memory
+tables (`tables` mode) after three warm runs in one process, and are not
+comparable to new runs.
 
 Other env knobs: `DUCKDB_THREADS` (defaults to the process CPU affinity, not the
 whole box), `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIR` (spill location), `STREAM`.
@@ -61,7 +49,5 @@ duckdb_cpu,500,query1,OK,10.226,4
 
 ## Getting parquet
 
-```bash
-./rapids/nds_h_pipeline.sh 1 2 1 /dev/shm/tpch_sf1     # generate SF1 to ramdisk
-./duckdb/make_parquet.sh 100                            # from existing DPFProto tbl data
-```
+Only from the repo's generator (`datagen/`, see `results/GENERATOR.md`);
+`run.sh` generates and validates missing datasets.

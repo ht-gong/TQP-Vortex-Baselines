@@ -1,19 +1,13 @@
-# merged image data
-docker-all/data/
-
 # pulled repo
 dpfproto/data
 dpfproto/logs/
 
 .venv/
 
-# ---- large generated data (regenerate via the gen pipelines) ----
-results/parquet/
-duckdb/results
-
-# ---- benchmark intermediates: results/all_results.csv is the ONLY kept results
-# file; every per-run / per-SF / detail CSV is a throwaway (runners merge into
-# all_results.csv via merge_results.py and delete their temp).
+# ---- benchmark intermediates: results/all_results.csv is the ONLY kept TPC-H
+# results file; every per-run / per-SF / detail CSV is a throwaway (runners merge
+# into all_results.csv via merge_results.py and delete their temp). The format
+# profiling pass keeps results/format_profile.csv and results/format_map.json.
 results/query_times_*.csv
 results/*_logs/
 **/_raw/
@@ -21,13 +15,10 @@ results/*_logs/
 **/_tmp_pq/
 **/_work/
 _spark_scratch/
-_polars_scratch/
 _polars_scratch_gpu/
-docker/data/
 
 # ---- python venvs & caches ----
-polars/.venv/
-polars/.venv-gpu/
+polars/.venv-gpu
 **/__pycache__/
 *.pyc
 
@@ -35,12 +26,14 @@ polars/.venv-gpu/
 rapids/jars/
 rapids/env/
 
-# ---- upstream clones (re-cloneable; URLs documented in READMEs) ----
-/lancelot/
-/spark-rapids-benchmarks/
+# ---- datagen toolchain (datagen/setup_datagen.sh recreates it) ----
+/datagen-venv/
+/datagen/dbgen/
+
+# ---- upstream clones (re-cloneable; pinned in datagen/setup_datagen.sh) ----
 /tpch-kit/
 # the sirius clone + its .pixi build env (setup_sirius.sh recreates it)
-/sirius/sirius/
+/sirius/sirius
 
 # ---- sirius spill scratch ----
 _sirius_spill/
@@ -48,3 +41,14 @@ _sirius_spill/
 # ---- run logs / captures ----
 *.log
 *.out
+
+# symlink onto the NVMe (see AGENTS.md) and the format profiling pass's
+# per-worker logs
+_polars_scratch_gpu
+results/format_profile_logs/
+
+# ---- box-specific settings for make / docker/run.sh (copy local.env.example) ----
+/local.env
+
+# ---- local planning notes (not committed) ----
+/docs/docker_migration_plan.md

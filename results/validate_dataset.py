@@ -10,7 +10,7 @@ passes every check, non-zero (with a diagnosis) on the first failure.
 Why this exists
 ---------------
 All baselines MUST run on parquet from the SAME generator: the NDS-H
-(spark-rapids-benchmarks) pipeline -- official TPC-H dbgen v3.0.0 CSV, transcoded
+pipeline (re-implemented in datagen/) -- TPC-H dbgen 2.17.3 CSV, transcoded
 by Spark (`nds_h_transcode.py`). See results/GENERATOR.md.
 
 Two classes of bad dataset have polluted results before, and this guard rejects

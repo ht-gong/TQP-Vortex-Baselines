@@ -8,17 +8,19 @@ provenance audit that found the invariant had been violated, and gives the guard
 
 ## The one allowed generator
 
-TPC-H parquet is produced **only** by the NDS-H
-(NVIDIA `spark-rapids-benchmarks`) pipeline:
+TPC-H parquet is produced **only** by the repo's `datagen/gen_tpch.sh`, a
+re-implementation of the NDS-H (NVIDIA `spark-rapids-benchmarks`) pipeline:
 
-1. `nds_h_gen_data.py` — official **TPC-H dbgen v3.0.0** → pipe-delimited `.tbl`.
-2. `nds_h_transcode.py` — Spark reads the `.tbl` with an explicit schema and
-   writes snappy parquet (writer `parquet-mr`), one 17-column table per dir with
-   a trailing `ignore` column absorbing dbgen's dangling `|`.
+1. `gen_tpch.py dbgen` — TPC-H **dbgen 2.17.3** (built from the pinned
+   `gregrahn/tpch-kit` clone, as the original datasets were) → pipe-delimited `.tbl`.
+2. `gen_tpch.py transcode` — Spark 3.5.8 reads the `.tbl` with the fixed NDS-H
+   schema and writes snappy parquet (writer `parquet-mr 1.13.1`), one 17-column
+   table per dir with a trailing `ignore` column absorbing dbgen's dangling `|`.
 
-Driver: `rapids/nds_h_pipeline.sh <SF> <PARALLEL> <BATCH> <out>` (and the
-image-internal `docker*/scripts/gen_data.sh`). Output layout — the layout every
-runner reads:
+Driver: `datagen/gen_tpch.sh <SF> <PARALLEL> <BATCH> <out>`. It was checked
+against the upstream NDS-H pipeline it replaces (same rows, schema and parquet
+layout; provenance note in `datagen/README.md`). Output layout — the layout
+every runner reads:
 
 ```
 <out>/parquet/<table>/part-NNNNN-<uuid>-c000.snappy.parquet
@@ -69,7 +71,7 @@ Restoring them means regenerate-clean + revalidate + re-run (below).
 ## Guard — `results/validate_dataset.py`
 
 ```
-python3 results/validate_dataset.py <parquet_dir> <scale_factor>
+make validate SF=<scale_factor>          # or: $PY results/validate_dataset.py <parquet_dir> <SF>
 ```
 
 Exits non-zero unless the dataset is clean external NDS-H. It checks:
@@ -79,18 +81,16 @@ Exits non-zero unless the dataset is clean external NDS-H. It checks:
   `distinct(p_brand,p_type,p_size) ≤ 187,500` (rejects the SF100/SF300 corruption);
 - **row counts** match the TPC-H per-SF formula.
 
-`rapids/nds_h_pipeline.sh` runs this automatically after generation and fails
-loudly if the fresh dataset does not pass. Run it by hand before trusting any
+`datagen/gen_tpch.sh` runs this automatically after generation and publishes
+`parquet/` only if the fresh dataset passes. Run it by hand before trusting any
 dataset you did not just generate.
 
 ## Regenerating SF30/50/100/300 to restore them
 
 ```bash
-# clean NDS-H parquet for a scale factor (PARALLEL≈2·SF, BATCH≈PARALLEL/5)
-rapids/nds_h_pipeline.sh 300 600 120 /root/tpc-h/sf300_ndsh
-python3 results/validate_dataset.py /root/tpc-h/sf300_ndsh/parquet 300   # must print VALID
-
-# then re-run every engine at that SF (each self-merges into all_results.csv)
-TPCH_SF=300 TPCH_PARQUET=/root/tpc-h/sf300_ndsh/parquet ./duckdb/run_duckdb.sh
-# ... sirius / polars_cpu / polars_gpu / rapids likewise (GPU engines: int32 caps ≈ SF300)
+# generate + validate (PARALLEL≈2·SF, BATCH 25), then run every engine at that SF;
+# each engine self-merges into all_results.csv
+make bench SF=300       # generates $DATA_DIR/sf300 if missing, validates, runs
 ```
+
+(GPU engines: int32 caps ≈ SF300.)

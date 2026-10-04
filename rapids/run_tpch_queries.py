@@ -1,12 +1,18 @@
 #!/usr/bin/env python
 """Run NDS-H (TPC-H) queries 1-22 on Spark with the RAPIDS GPU accelerator.
 
-Reads parquet tables from --input (one sub-dir per table), registers each as a
-temp view, then executes the marker-delimited query stream produced by qgen.
-Mirrors nds_h_power.py's stream parsing (incl. multi-statement Q15) but is
-self-contained. Per-query wall time + GPU-operator count are reported.
+Registers each parquet table (one sub-dir per table) as a temp view, then
+executes the marker-delimited query stream produced by qgen. Mirrors
+nds_h_power.py's stream parsing (incl. multi-statement Q15) but is
+self-contained.
 
-  spark-submit ... run_tpch_queries.py <input_dir> <stream.sql> <out_csv>
+Protocol (as every engine, see AGENTS.md): an untimed warm pass first runs the
+same queries on the SF1 dataset in $WARM_PARQUET (GPU init, kernel JIT, reader
+setup); then the views point at <input_dir> and each query runs once, timed.
+A query that fails in the warm pass is recorded FAIL and not timed. Per-query
+wall time + GPU-operator count are reported.
+
+  spark-submit ... run_tpch_queries.py <input_dir> <stream.sql> <out_csv> [SUBSET] [append]
 """
 import os, re, sys, time
 from collections import OrderedDict
@@ -42,59 +48,87 @@ def _code_only(stmt):
                      if not l.strip().startswith("--")).strip().lower()
 
 
+def register(spark, root):
+    """One temp view per table over the parquet under root (replacing earlier ones)."""
+    for t in TABLES:
+        spark.read.parquet(f"{root}/{t}").createOrReplaceTempView(t)
+
+
+def run(spark, stmts):
+    """Run one query's statements; return (result rows, GPU operators in the plan)."""
+    gpu_ops, nrows = 0, 0
+    for stmt in stmts:
+        df = spark.sql(stmt)
+        code = _code_only(stmt)
+        if code.startswith("select") or code.startswith("with"):
+            res = df.collect()
+            nrows = len(res)
+            # read the plan AFTER execution so AQE's finalized (GPU) plan is reflected
+            plan = df._jdf.queryExecution().executedPlan().toString()
+            gpu_ops = sum(1 for ln in plan.splitlines() if "Gpu" in ln)
+        else:
+            df.collect()  # DDL (create/drop view)
+    return nrows, gpu_ops
+
+
+def collect_garbage(spark):
+    """Force a JVM GC so Spark's ContextCleaner deletes finished shuffle files now,
+    instead of letting scratch accumulate across the session."""
+    try:
+        spark.sparkContext._jvm.System.gc()
+        time.sleep(2)
+    except Exception:
+        pass
+
+
 def main():
+    warm = os.environ.get("WARM_PARQUET") or sys.exit(
+        "WARM_PARQUET is not set (the SF1 dataset of the warm pass)")
     spark = SparkSession.builder.appName("NDS-H Power Run (RAPIDS GPU)").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     print("Spark", spark.version, "| rapids.sql.enabled =",
           spark.conf.get("spark.rapids.sql.enabled", "false"),
           "| plugins =", spark.conf.get("spark.plugins", "<none>"))
 
-    # register tables
-    for t in TABLES:
-        spark.read.parquet(f"{INPUT}/{t}").createOrReplaceTempView(t)
-    print("Registered temp views:", ", ".join(TABLES))
-
-    # Warm-up: trigger GPU init + kernel JIT once so it is NOT counted in any
-    # query's measured time. Exercises scan + filter + aggregate on the GPU.
-    t0 = time.time()
-    spark.sql("select l_returnflag, count(*) c, sum(l_quantity) q "
-              "from lineitem where l_orderkey < 100000 group by l_returnflag").collect()
-    print(f"GPU warm-up done in {time.time()-t0:.1f}s (excluded from query timings)")
-
     queries = parse_stream(STREAM)
     if SUBSET:
         queries = OrderedDict((k, v) for k, v in queries.items() if k in SUBSET)
+
+    # Warm pass: the same queries on SF1, untimed.
+    register(spark, warm)
+    warm_failed = {}
+    t0 = time.time()
+    for num, stmts in queries.items():
+        tq = time.time()
+        try:
+            run(spark, stmts)
+        except Exception as e:
+            warm_failed[num] = (time.time() - tq, str(e).splitlines()[0][:80].replace(",", ";"))
+    collect_garbage(spark)
+    print(f"SF1 warm pass done in {time.time()-t0:.1f}s (excluded from query timings)")
+
+    register(spark, INPUT)
+    print("Registered temp views:", ", ".join(TABLES))
     rows = []
     print(f"\n{'query':10} {'status':8} {'secs':>8} {'gpu_ops':>8} {'result_rows':>12}")
     for num, stmts in queries.items():
         name = f"query{num}"
+        if num in warm_failed:
+            dt, msg = warm_failed[num]
+            msg = f"SF1 warm pass: {msg}"[:80]
+            print(f"{name:10} {'FAIL':8} {dt:8.2f}   {msg}")
+            rows.append((name, "FAIL", f"{dt:.3f}", 0, msg))
+            continue
         t0 = time.time()
         try:
-            gpu_ops, nrows = 0, 0
-            for stmt in stmts:
-                df = spark.sql(stmt)
-                code = _code_only(stmt)
-                if code.startswith("select") or code.startswith("with"):
-                    res = df.collect()
-                    nrows = len(res)
-                    # read the plan AFTER execution so AQE's finalized (GPU) plan is reflected
-                    plan = df._jdf.queryExecution().executedPlan().toString()
-                    gpu_ops = sum(1 for ln in plan.splitlines() if "Gpu" in ln)
-                else:
-                    df.collect()  # DDL (create/drop view)
+            nrows, gpu_ops = run(spark, stmts)
             dt = time.time() - t0
             print(f"{name:10} {'OK':8} {dt:8.2f} {gpu_ops:8d} {nrows:12d}")
             rows.append((name, "OK", f"{dt:.3f}", gpu_ops, nrows))
-            # Force JVM GC so Spark's ContextCleaner deletes this query's shuffle
-            # files now, instead of letting scratch accumulate across the session.
-            try:
-                spark.sparkContext._jvm.System.gc()
-                time.sleep(2)
-            except Exception:
-                pass
+            collect_garbage(spark)
         except Exception as e:
             dt = time.time() - t0
-            msg = str(e).splitlines()[0][:80]
+            msg = str(e).splitlines()[0][:80].replace(",", ";")
             print(f"{name:10} {'FAIL':8} {dt:8.2f}   {msg}")
             rows.append((name, "FAIL", f"{dt:.3f}", 0, msg))
 

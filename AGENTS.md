@@ -5,27 +5,38 @@ parquet dataset and collects per-query runtimes into `results/all_results.csv`.
 Start with `README.md`; this file is the quick agent orientation and the
 results-data contract.
 
-## Running — one entry point
+## Running — one entry point: `make`
+
+Every workflow runs in one pinned Docker image through `make`; each target calls
+`docker/run.sh`, which mounts the repo, `DATA_DIR` and `SCRATCH` at their host
+paths and runs the target's script inside. Box settings (`DATA_DIR`, `SCRATCH`,
+`SHM`, `GPU`) come from the environment or `local.env` (copy
+`local.env.example`).
 
 ```bash
-./run.sh [SF_SPEC ...]
+make image && make doctor            # once per pin change; doctor checks GPU, io_uring, versions
+make data SF=100                     # generate (if missing) + validate $DATA_DIR/sf100
+make bench SF="100 300" [ENGINES="rapids sirius"] [QUERIES="1 6"]
+make smoke                           # SF1, all engines, nothing merged; fails unless 22/22 everywhere
+make ablation [SF=5] [ENCODINGS="plain dict delta"] [COMPRESSIONS="snappy zstd lz4raw"] [ROUNDS=3] [TOL=0.05] [OUT=dir]
+make pth SF=1                        # TQP-Vortex .pth export
+make summary                         # pivots of all_results.csv
+make shell                           # interactive shell in the container
 ```
 
-For each scale factor, `run.sh` ensures the dataset is on disk (generating it if
-missing), validates it, stages it disk → ramdisk, runs each engine against the
+`make bench` runs `run.sh`: per scale factor it ensures the dataset
+(`datagen/dataset.sh`), stages it disk → ramdisk, runs each engine against the
 ramdisk copy, then frees the ramdisk. Engines self-merge into
-`results/all_results.csv`.
+`results/all_results.csv`. `SF` takes bare numbers or ranges over the canonical
+set `{30,50,100,300,500,700}` (`30-300`); `ENGINES` defaults to
+`rapids polars_gpu duckdb_cpu sirius`. Pass-through settings (`QUERIES`,
+`KEEP_RAMDISK`, `GEN_PARALLEL`, `GEN_BATCH`, `DRIVER_MEM`, `GPU_PART_MB`,
+`MIN_FREE_GB`, timeouts, …) are listed in `docker/run.sh`.
 
-- `SF_SPEC` — scale factors: bare numbers (`100`) or an inclusive range over the
-  canonical set `{30,50,100,300,500,700}` (`30-300`). Default `30 50 100 300 500 700`.
-- `ENGINES` — space-separated, in run order. Default `rapids polars_gpu duckdb_cpu sirius`
-  (also available: `polars_cpu`).
-- `DATA_DIR` — on-disk datasets at `$DATA_DIR/sf<SF>/parquet/<table>/` (default `./data`).
-- `QUERIES`, `SHM`, `KEEP_RAMDISK`, `GEN_PARALLEL`, `GEN_BATCH`, and the usual
-  runner passthroughs (`DRIVER_MEM`, `SPARK_SCRATCH`, `GPU_PART_MB`, `MIN_FREE_GB`).
-
-Each engine's runner can also be invoked directly on a ramdisk dataset — see the
-`run_engine` cases in `run.sh`.
+Runners read the tool paths the image sets — `PY`, `POLARS_PY`, `JAVA_HOME`,
+`SPARK_HOME`, `RAPIDS_JAR`, `SIRIUS_DUCKDB`, `SIRIUS_ENVLIB`, `DBGEN_DIR` — and
+`SCRATCH` (engine scratch: `$SCRATCH/rapids`, `$SCRATCH/polars`, `$SCRATCH/probe`).
+Nothing in the scripts names a box-specific path.
 
 ## Engines & runners
 
@@ -35,14 +46,28 @@ Each engine's runner can also be invoked directly on a ramdisk dataset — see t
 | `polars_gpu` (cudf-polars, GPU) | `polars/` | `run_polars_gpu.sh` |
 | `duckdb_cpu` (DuckDB, CPU) | `duckdb/` | `run_duckdb.sh` |
 | `sirius` (Sirius GPU, DuckDB ext.) | `sirius/` | `run_sirius.sh` |
-| `polars_cpu` (Polars streaming, CPU) | `polars/` | `run_polars.sh` |
 
-`duckdb_cpu` is the **odd one out on protocol**: a single process loads the
-dataset into in-memory tables once (load excluded from timing), then prewarms and
-measures — not one cold process per query. Its `seconds` are therefore **warm**,
-unlike every other engine's, and are a lower bound in any cross-engine comparison.
-`RUNS=1 WARMUPS=0 ./duckdb/run_duckdb.sh` gives cold, comparable numbers. Details
-in `duckdb/README.md`.
+Engine settings shared by a runner and the format probes live in
+`rapids/activate.sh` (`rapids_run_args`), `polars/env.sh`, `sirius/env.sh`.
+
+**Every engine reads the ramdisk parquet in every query; none loads tables into
+memory.** DuckDB and Sirius use views over `read_parquet()` (DuckDB's external
+file cache off, Sirius's prefetch cache off), RAPIDS temp views over
+`spark.read.parquet`, Polars `scan_parquet`. Sirius must not use `pin_table`: a
+pin decodes the parquet into cuDF columns in pinned memory, so the parquet format
+would no longer reach query time (`sirius/README.md`). DuckDB's in-memory
+`tables` mode was removed.
+
+**One protocol for every engine: one process per query, an SF1 warm pass, one
+timed run.** In each query's process an untimed warm pass first runs the same
+query on SF1 (`run.sh` stages `$DATA_DIR/sf1` to the ramdisk once per run and
+passes it as `WARM_PARQUET`), so GPU init, kernel JIT and reader setup stay out
+of the timing, as in TQP-Vortex's SF1 warmup. Then the query runs once on the
+target SF's ramdisk copy, timed. No query runs twice on the target data in one
+process; repeating a measurement means a new process. A query that fails its
+warm pass is recorded `FAIL` and not timed. The SF500 rows in `all_results.csv`
+predate this protocol: each engine ran its own warm-up query on the target data
+instead, and duckdb_cpu ran on in-memory tables after three warm runs.
 
 Runners read the same `results/queries/stream_qualification.sql`, take
 `TPCH_PARQUET` / `TPCH_SF`, write a throwaway temp CSV, then fold their 22 rows
@@ -52,34 +77,36 @@ kept; `TPCH_MERGE=0` keeps the temp instead of merging.
 
 ## Data — one generator for every engine
 
-Every engine must run byte-identical parquet, from the **NDS-H** generator
-(official TPC-H dbgen → Spark transcode, writer `parquet-mr`). **Never** point a
-runner at self-written parquet — DuckDB's own `CALL dbgen` export (16-col, no
-trailing `ignore`) or a cudf export — it is not comparable to the external
-standard and gives different query answers.
+Every engine must run byte-identical parquet, from the in-repo generator
+`datagen/gen_tpch.sh` (TPC-H dbgen → Spark transcode, writer `parquet-mr`). It is
+a re-implementation of NVIDIA's NDS-H pipeline (provenance: `datagen/README.md`).
+**Never** point a runner at self-written parquet — DuckDB's own `CALL dbgen`
+export (16-col, no trailing `ignore`) or a cudf export — it is not comparable to
+the external standard and gives different query answers.
 
-```bash
-rapids/nds_h_pipeline.sh <SF> <PARALLEL> <BATCH> <out_dir>   # -> <out_dir>/parquet/<table>/
-python3 results/validate_dataset.py <parquet_dir> <SF>       # writer, part.p_brand, row counts
-```
-
-`run.sh` generates missing datasets and validates before every run; the pipeline
-validates immediately after generation. Full rules and rationale:
+`make data` / `make bench` generate missing datasets and validate
+(`results/validate_dataset.py`: writer, `part.p_brand`, row counts); the pipeline
+publishes `parquet/` only after it validates. Full rules and rationale:
 `results/GENERATOR.md`.
+
+The same data is TQP-Vortex's ground truth: `make pth SF=…` writes
+`$DATA_DIR/pth/SF<SF>-tensor-<COL>.pth` (54 columns, TorchScript archives read by
+TQP-Vortex's unmodified loader, rows in parquet order, plus a manifest); TQP-Vortex
+uses them with `TQP_DATA_DIR=$DATA_DIR/pth`. Details in `datagen/README.md`.
 
 ## Results data contract — `results/all_results.csv`
 
 **The single source of truth.** One row per `(engine, scale_factor, query)`.
 Summary / matrices / per-engine scaling are all pivots of this — do NOT add
-parallel summary CSVs; pivot this instead.
+parallel summary CSVs; pivot this instead (`make summary`).
 
 | column | type | values / meaning |
 |--------|------|------------------|
-| `engine` | string | `rapids` · `polars_gpu` · `duckdb_cpu` · `sirius` · `polars_cpu` |
+| `engine` | string | `rapids` · `polars_gpu` · `duckdb_cpu` · `sirius`; legacy `polars_cpu` (retired Polars CPU engine; its SF500 rows remain) |
 | `scale_factor` | int | TPC-H scale factor (≈ GB raw) |
 | `query` | string | `query1` … `query22` |
 | `status` | string | `OK` · `FAIL` (engine error; **GPU OOM** shows here with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` (disk-watchdog kill) · `TIMEOUT` (per-query timeout) |
-| `seconds` | float | per-query wall-clock, engine startup excluded; time-to-failure on error; `NA` on a watchdog kill |
+| `seconds` | float | wall-clock of the query's one timed run on the target SF, in its own process after an untimed SF1 warm pass (engine startup excluded); time-to-failure on error; `NA` on a watchdog kill |
 | `rows_or_error` | int / string | result **row count** when `OK`, else a short error string |
 
 ```csv
@@ -88,22 +115,62 @@ rapids,100,query1,OK,2.308,4
 sirius,500,query9,FAIL,259.488,INTERNAL Error: ... GPU pipeline task exceeded maximum OOM retry limit (100) for
 ```
 
-Pivots:
-```bash
-duckdb -c "SELECT engine,scale_factor,count(*) FILTER(status='OK') ok,
-  round(sum(seconds) FILTER(status='OK'),1) total_s
-  FROM 'results/all_results.csv' GROUP BY 1,2 ORDER BY 1,2"          -- summary
-duckdb -c "PIVOT 'results/all_results.csv'
-  ON engine||'_sf'||scale_factor USING first(seconds) GROUP BY query"   -- matrix
-```
+## Parquet-format profiling pass
+
+A second experiment, separate from the engine comparison: which parquet format
+(encoding × compression) each engine scans and decodes fastest, per column.
+`make ablation` (`ablation/format_profile.py`) builds one uniform variant
+dataset per format (`$DATA_DIR/fmt_sf<SF>/shuffle-<encoding>-<compression>/`,
+same rows, from one dbgen run via `gen_tpch.sh`'s `RAW_STORE` /
+`TRANSCODE_OPTS`), then times one `SELECT min(c), max(c)` probe per (engine,
+column, format, round), no TPC-H: one worker per (engine, variant, round) probes
+every column in shuffled order after untimed priming, engine caches off, CPU
+fallback recorded as `FALLBACK`, hangs as `TIMEOUT` (worker restarted). `SF`
+defaults to 5. It writes two files to `OUT` (default `results/`):
+
+- `format_profile.csv` — one row per `(engine, scale_factor, table, column,
+  encoding, compression)`: `status` (`OK` if OK in every round, else the non-OK
+  status), `seconds` (median over rounds; empty unless OK), `bytes` (the
+  column's compressed size in that format). A run replaces the rows of the
+  engines it ran at that SF.
+- `format_map.json` — the decision: `{"sf<SF>": {"scale_factor", "tolerance",
+  "engines": {engine: {table: {column: {"encoding", "compression"} | null}}}}}`.
+  Fastest OK format per engine and column; formats within `TOL` of it are tied
+  and the fewest bytes wins.
+
+It ends by printing the results: per engine, the probe seconds summed over all
+columns for each format, and the map's.
+Per-round, per-worker probe logs stay in `OUT/format_profile_logs/` (gitignored).
 
 ## Notes for agents
 
 - Result row counts (`rows_or_error` when `OK`) vary with scale factor but must
   **match across engines at the same SF** — a mismatch means a correctness bug.
-- Validate any dataset you did not just generate: `results/validate_dataset.py`.
-- Not committed (regenerate): the `sirius/sirius/` clone + `.pixi/` env, python
-  venvs, the RAPIDS jar/conda env, and the parquet datasets (all gitignored).
-- Container quirks: `io_uring` is blocked (Sirius uses kvikio, `KVIKIO_COMPAT_MODE=ON`);
-  `run.sh` drops empty 0-row parquet part-files before running (Sirius's GPU
-  reader errors on them).
+  SF1 reference: q1–q22 = 4, 100, 10, 5, 5, 1, 4, 2, 175, 20, 29531, 2, 42, 1, 1,
+  18314, 1, 57, 1, 186, 100, 7.
+- Validate any dataset you did not just generate: `make validate SF=…`.
+- Pins: `versions.env` + `docker/*.lock`. A bump is its own change and triggers
+  re-runs; the image tag changes with it.
+- Not committed (regenerate): parquet datasets, the image, `local.env`.
+- GPUs are shared with other users: set `GPU` to an idle one; `make doctor`
+  warns on a busy GPU and fails on an exclusive-mode one (Sirius fails at
+  startup if one is visible). Inside the container the GPU is device 0.
+- Container quirks, all handled by `docker/run.sh`: Docker's default seccomp
+  profile blocks io_uring, and without it Sirius silently falls back to kvikio
+  (`docker/seccomp-iouring.json`, `--ulimit memlock=-1`; `sirius/env.sh` probes
+  io_uring and falls back to kvikio only where it is blocked). The container user
+  gets a passwd entry (Java/Hadoop need a user name). `--ipc=host` makes
+  `/dev/shm` the host's ramdisk. `KVIKIO_COMPAT_MODE=ON` stays set for
+  polars_gpu/sirius since cuFile/GDS is unavailable. `run.sh` drops empty 0-row
+  parquet part-files from the ramdisk copy (Sirius's GPU reader errors on them).
+- NUMA: with a GPU, `docker/run.sh` binds the whole container to the GPU's NUMA
+  node (`--cpuset-cpus`/`--cpuset-mems`): every engine thread, every pinned host
+  pool and the ramdisk copy (tmpfs pages go to the writer's node) are local to
+  the GPU, and Spark `local[*]`, Polars and DuckDB size their thread pools from
+  the bound CPUs (104 here). `--cap-add SYS_NICE` lets Sirius `mbind` its pinned
+  pool (Docker's seccomp profile blocks `mbind` without it). `NUMA=off` unbinds;
+  `make doctor` checks both. On this box GPUs 0-3 are on node 0, 4-7 on node 1.
+- On this box: `/` is nearly full, so datasets and scratch live on the NVMe
+  (`DATA_DIR=/data/haotiang/parquet-ablation`); Docker's data root is on the NVMe too.
+- `dpfproto/` (GOLAP/DPFProto notes, a git submodule) is separate and not wired
+  into `make`.

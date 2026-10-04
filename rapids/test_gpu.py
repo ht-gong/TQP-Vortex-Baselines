@@ -16,7 +16,7 @@ from pyspark.sql import functions as F
 
 RAPIDS_JAR = os.environ.get(
     "RAPIDS_JAR",
-    "/workspace/baseline/rapids/jars/rapids-4-spark_2.12-26.04.2-cuda12.jar",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "jars", "rapids-4-spark_2.12-26.04.2-cuda12.jar"),
 )
 
 spark = (

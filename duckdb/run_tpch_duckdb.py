@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Usage: run_tpch_duckdb.py <parquet_dir> <stream.sql> <out_csv> [queries] [runs] [warmups]
+"""Usage: run_tpch_duckdb.py <parquet_dir> <stream.sql> <out_csv> [queries] [append]
 
 DuckDB CPU baseline over the shared TPC-H parquet dataset.
 
-Load modes (DUCKDB_LOAD_MODE):
-  tables (default) -- CREATE TABLE AS SELECT from parquet, so the whole dataset
-                      is resident in memory before timing starts; load time is
-                      excluded from per-query seconds. Needs RAM >= dataset.
-  views            -- CREATE VIEW over read_parquet(); parquet scan cost is
-                      included in every query's time.
+Every table is a view over read_parquet() of the ramdisk copy, and DuckDB's
+external file cache is off, so every query reads and decodes its parquet from
+the ramdisk; nothing is loaded into memory ahead of the timed run.
 
-Timing follows the repo results contract (see AGENTS.md): one cold measured run
-per query by default (RUNS=1, WARMUPS=0), engine startup and load excluded. With
-RUNS>1 the reported seconds is the median of the measured runs.
+Protocol (as every engine, see AGENTS.md; run_duckdb.sh starts one process per
+query): an untimed warm pass first runs the same queries on the SF1 dataset in
+$WARM_PARQUET, then the views point at <parquet_dir> and each query runs once,
+timed (engine startup excluded). A query that fails in the warm pass is
+recorded FAIL and not timed.
 
 Emits the merge_results.py input schema -- `query,status,seconds,
 result_rows_or_error`, one row per query -- so run_duckdb.sh can fold it into
@@ -23,27 +22,12 @@ import os
 import re
 import sys
 import time
-from statistics import median
 
 import duckdb
 
 
 TABLES = ["region", "nation", "supplier", "customer",
           "part", "partsupp", "orders", "lineitem"]
-
-# TPC-H primary keys, applied after load in `tables` mode only when DUCKDB_PK=1.
-# Off by default: the ART index build on lineitem (3B rows at SF500) costs a lot
-# of time and memory, and no TPC-H query plan uses these indexes for its joins.
-PRIMARY_KEYS = {
-    "region": "r_regionkey",
-    "nation": "n_nationkey",
-    "part": "p_partkey",
-    "supplier": "s_suppkey",
-    "customer": "c_custkey",
-    "orders": "o_orderkey",
-    "partsupp": "ps_partkey, ps_suppkey",
-    "lineitem": "l_orderkey, l_linenumber",
-}
 
 
 def parse_stream(path):
@@ -57,25 +41,31 @@ def parse_stream(path):
         }
 
 
-def load_dataset(con, parquet, mode, with_pk):
-    """Materialise the parquet dataset as in-memory tables, or as views."""
+def create_views(con, parquet):
+    """One view per table over read_parquet() of the parquet dataset (replacing
+    any earlier view of that name)."""
     base = parquet.rstrip("/")
     for t in TABLES:
-        glob = f"{base}/{t}/*.parquet"
-        t0 = time.time()
-        if mode == "views":
-            con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{glob}')")
-            print(f"  view {t}", flush=True)
-        else:
-            con.execute(f"CREATE TABLE {t} AS SELECT * FROM parquet_scan('{glob}')")
-            n = con.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-            print(f"  loaded {t:9s} {n:>13,} rows  {time.time() - t0:7.1f}s", flush=True)
+        con.execute(f"CREATE OR REPLACE VIEW {t} AS SELECT * FROM read_parquet('{base}/{t}/*.parquet')")
 
-    if mode == "tables" and with_pk:
-        for t in TABLES:
-            t0 = time.time()
-            con.execute(f"ALTER TABLE {t} ADD PRIMARY KEY ({PRIMARY_KEYS[t]})")
-            print(f"  pk {t:9s} {time.time() - t0:7.1f}s", flush=True)
+
+def connect():
+    """In-memory connection with the benchmark settings; returns (con, threads)."""
+    con = duckdb.connect()
+    # honour cgroup/taskset affinity -- os.cpu_count() reports the whole box and
+    # would oversubscribe when the container is pinned to a subset.
+    default_threads = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    threads = int(os.environ.get("DUCKDB_THREADS", default_threads))
+    con.execute(f"PRAGMA threads={threads}")
+    mem = os.environ.get("DUCKDB_MEMORY_LIMIT")
+    if mem:
+        con.execute(f"PRAGMA memory_limit='{mem}'")
+    if os.environ.get("DUCKDB_TEMP_DIR"):
+        con.execute(f"PRAGMA temp_directory='{os.environ['DUCKDB_TEMP_DIR']}'")
+    # no in-memory copy of parquet file bytes across queries: every query reads
+    # the ramdisk
+    con.execute("SET enable_external_file_cache = false")
+    return con, threads
 
 
 def run_query(con, stmts):
@@ -97,52 +87,48 @@ def main():
 
     # get args
     parquet, stream, out_csv = sys.argv[1:4]
-    subset = sys.argv[4].replace(",", " ").split() if len(sys.argv) > 4 and sys.argv[4] else range(1, 23)
-    runs = int(sys.argv[5]) if len(sys.argv) > 5 else int(os.environ.get("RUNS", "1"))
-    warmups = int(sys.argv[6]) if len(sys.argv) > 6 else int(os.environ.get("WARMUPS", "0"))
+    subset = [int(q) for q in (sys.argv[4].replace(",", " ").split()
+                               if len(sys.argv) > 4 and sys.argv[4] else range(1, 23))]
+    append = len(sys.argv) > 5 and sys.argv[5] == "append"
+    warm = os.environ.get("WARM_PARQUET") or sys.exit(
+        "WARM_PARQUET is not set (the SF1 dataset of the warm pass)")
     sf = os.environ.get("TPCH_SF", "500")
-    mode = os.environ.get("DUCKDB_LOAD_MODE", "tables")
-    with_pk = os.environ.get("DUCKDB_PK", "0") == "1"
 
-    # connect to duckdb
-    con = duckdb.connect()
-    # honour cgroup/taskset affinity -- os.cpu_count() reports the whole box and
-    # would oversubscribe when the container is pinned to a subset.
-    default_threads = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
-    threads = int(os.environ.get("DUCKDB_THREADS", default_threads))
-    con.execute(f"PRAGMA threads={threads}")
-    mem = os.environ.get("DUCKDB_MEMORY_LIMIT")
-    if mem:
-        con.execute(f"PRAGMA memory_limit='{mem}'")
-    if os.environ.get("DUCKDB_TEMP_DIR"):
-        con.execute(f"PRAGMA temp_directory='{os.environ['DUCKDB_TEMP_DIR']}'")
-
-    print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} mode={mode} "
-          f"pk={with_pk} runs={runs} warmups={warmups}", flush=True)
-    print(f"loading {parquet} ...", flush=True)
-    t0 = time.time()
-    load_dataset(con, parquet, mode, with_pk)
-    print(f"load complete in {time.time() - t0:.1f}s (excluded from query times)", flush=True)
-
+    con, threads = connect()
+    print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} views over {parquet} "
+          f"queries={subset}", flush=True)
     queries = parse_stream(stream)
-    with open(out_csv, "w", newline="") as f:
+
+    # Warm pass: the same queries on SF1, untimed.
+    create_views(con, warm)
+    warm_failed = {}
+    t0 = time.time()
+    for q in subset:
+        tq = time.time()
+        try:
+            run_query(con, queries[q])
+        except Exception as e:
+            warm_failed[q] = (time.time() - tq, str(e).splitlines()[0][:120])
+    print(f"SF1 warm pass done in {time.time() - t0:.1f}s (excluded from query timings)", flush=True)
+    create_views(con, parquet)
+
+    write_header = not (append and os.path.exists(out_csv))
+    with open(out_csv, "a" if append else "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["query", "status", "seconds", "result_rows_or_error"])
+        if write_header:
+            w.writerow(["query", "status", "seconds", "result_rows_or_error"])
 
         for q in subset:
-            q = int(q)
+            if q in warm_failed:
+                dt, msg = warm_failed[q]
+                w.writerow([f"query{q}", "FAIL", f"{dt:.3f}", f"SF1 warm pass: {msg}"])
+                print(f"query{q:<3d} FAIL SF1 warm pass: {msg}", flush=True)
+                f.flush()
+                continue
             try:
-                # optional warmups, then the measured run(s)
-                for _ in range(warmups):
-                    run_query(con, queries[q])
-
-                times, rows = [], 0
-                for _ in range(runs):
-                    t0 = time.time()
-                    rows = run_query(con, queries[q])
-                    times.append(time.time() - t0)
-
-                dt = median(times)
+                t0 = time.time()
+                rows = run_query(con, queries[q])
+                dt = time.time() - t0
                 w.writerow([f"query{q}", "OK", f"{dt:.3f}", rows])
                 print(f"query{q:<3d} OK   {dt:8.3f}s rows={rows}", flush=True)
             except Exception as e:
@@ -150,7 +136,6 @@ def main():
                 w.writerow([f"query{q}", "FAIL", "NA", msg])
                 print(f"query{q:<3d} FAIL {msg}", flush=True)
             f.flush()
-
 
 if __name__ == "__main__":
     main()
