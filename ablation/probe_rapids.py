@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """rapids column probes (see probe_common.py). Launched with the TPC-H runner's
-spark-submit flags (rapids_run_args in rapids/activate.sh); same temp views and
-warm-up as rapids/run_tpch_queries.py. A probe whose executed plan has any
-operator outside the GPU (a CPU scan or aggregate) is recorded as FALLBACK."""
+spark-submit flags (rapids_run_args in rapids/activate.sh); the same temp views
+as rapids/run_tpch_queries.py, then a GPU warm-up query. A probe whose executed
+plan has any operator outside the GPU (a CPU scan or aggregate) is recorded as
+FALLBACK."""
 import os
 import re
 import sys

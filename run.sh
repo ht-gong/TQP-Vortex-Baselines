@@ -8,6 +8,11 @@
 # ramdisk before the next scale factor. Each engine self-merges its 22 rows into
 # results/all_results.csv.
 #
+# Protocol, the same for every engine: one process per query. In that process an
+# untimed warm pass first runs the same query on SF1 (a ramdisk copy staged once
+# per run and passed as WARM_PARQUET), then the timed run reads the target SF's
+# ramdisk parquet. No query runs twice on the target data within a process.
+#
 #   ./run.sh [SF_SPEC ...]
 #
 #   SF_SPEC   scale factors to run. A bare number (e.g. 100) or an inclusive
@@ -22,7 +27,7 @@
 #   SCRATCH   engine scratch root (required; runners use $SCRATCH/<engine>).
 #   SHM       ramdisk root (default /dev/shm).
 #   QUERIES   query subset (default "1 2 ... 22").
-#   KEEP_RAMDISK=1   keep the staged ramdisk copy after a scale factor (default: delete).
+#   KEEP_RAMDISK=1   keep the staged ramdisk copies, incl. the SF1 warm copy (default: delete).
 #   GEN_PARALLEL / GEN_BATCH   override dbgen chunking for generation.
 #   DRIVER_MEM, GPU_PART_MB, MIN_FREE_GB ... passed through to runners.
 #   RUN_CSV_DIR=<dir>  smoke mode: nothing is merged; each engine's rows stay in
@@ -96,6 +101,14 @@ for f in glob.glob(f"{sys.argv[1]}/*/*.parquet"):
 PY
 }
 
+# Copy a parquet dataset disk -> <ramdisk dir>/parquet and drop its empty
+# part-files. $1=disk parquet dir  $2=ramdisk dir
+stage(){
+  rm -rf "$2"; mkdir -p "$2"
+  cp -r "$1" "$2/parquet" || { rm -rf "$2"; return 1; }
+  remove_empty_parquets "$2/parquet"
+}
+
 run_engine(){   # $1=engine  $2=ramdisk_parquet  $3=SF
   local e="$1" pq="$2" sf="$3" smoke=()
   [ -z "${RUN_CSV_DIR}" ] || smoke=(TPCH_MERGE=0 OUT_CSV="${RUN_CSV_DIR}/${e}_sf${sf}.csv")
@@ -122,11 +135,18 @@ SFS="$(expand_sfs "${@:-30 50 100 300 500 700}")"
 log "TPC-H run. SFs=[${SFS}] engines=[${ENGINES}] data=${DATA_DIR} ramdisk=${SHM}${RUN_CSV_DIR:+ smoke -> ${RUN_CSV_DIR}}"
 [ -z "${RUN_CSV_DIR}" ] || { mkdir -p "${RUN_CSV_DIR}"; rm -f "${RUN_CSV_DIR}"/*_sf*.csv; }
 
+# The SF1 copy every engine process warms up on (see the protocol above).
+WARM_DIR="${SHM}/tpch_warm_sf1"
+WARM_DISK="$(ensure_dataset 1)" && [ -d "${WARM_DISK}" ] \
+  || { log "!! no valid SF1 dataset for the warm pass"; exit 1; }
+log "staging ${WARM_DISK} -> ${WARM_DIR}/parquet (SF1 warm pass) ..."
+stage "${WARM_DISK}" "${WARM_DIR}" || { log "!! staging the SF1 warm copy failed"; exit 1; }
+export WARM_PARQUET="${WARM_DIR}/parquet"
+
 for SF in ${SFS}; do
   log "=== SF${SF} ==="
 
-  DISK_PQ="$(ensure_dataset "${SF}")"
-  [ -n "${DISK_PQ}" ] || { log "    skipping SF${SF}"; continue; }
+  DISK_PQ="$(ensure_dataset "${SF}")" && [ -d "${DISK_PQ}" ] || { log "    skipping SF${SF}"; continue; }
 
   # Stage disk -> ramdisk (need ~1x parquet size + headroom).
   need=$(( SF * 36 * 13 / 1000 + 20 ))
@@ -136,9 +156,7 @@ for SF in ${SFS}; do
     log "    !! not enough ramdisk on the GPU's NUMA node (need ~${need}GB, free $(shm_free_gb)GB) -> skipping SF${SF}"; continue
   fi
   log "    staging ${DISK_PQ} -> ${RAM_PQ} ..."
-  mkdir -p "${RAM_DIR}"
-  cp -r "${DISK_PQ}" "${RAM_PQ}" || { log "    !! stage failed"; rm -rf "${RAM_DIR}"; continue; }
-  remove_empty_parquets "${RAM_PQ}"
+  stage "${DISK_PQ}" "${RAM_DIR}" || { log "    !! stage failed"; continue; }
   log "    staged: $(du -sh "${RAM_PQ}" 2>/dev/null | cut -f1)"
 
   for E in ${ENGINES}; do
@@ -156,6 +174,7 @@ for SF in ${SFS}; do
 
   [ "${KEEP_RAMDISK:-0}" = 1 ] || rm -rf "${RAM_DIR}"
 done
+[ "${KEEP_RAMDISK:-0}" = 1 ] || rm -rf "${WARM_DIR}"
 
 if [ -z "${RUN_CSV_DIR}" ]; then
   log "=== done -> ${RESULTS}/all_results.csv ==="

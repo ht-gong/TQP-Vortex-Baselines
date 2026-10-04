@@ -11,7 +11,7 @@ Temurin 17 JDK (`$JAVA_HOME`).
 | path | purpose |
 |------|---------|
 | `run_tpch_safe.sh` | the runner: one `spark-submit` per query, a disk watchdog and an optional per-query timeout; merges into `results/all_results.csv` |
-| `run_tpch_queries.py` | runs the qgen stream's queries in one Spark session; per-query wall time and GPU-operator count |
+| `run_tpch_queries.py` | runs the qgen stream's queries in one Spark session: an untimed warm pass on SF1 (`WARM_PARQUET`), then each query once on the target dataset, timed; wall time and GPU-operator count |
 | `activate.sh` | `source` it for the Spark toolchain, `$RAPIDS_JAR`/`$RAPIDS_CONF`, a `rapids-submit` helper and `rapids_run_args` (the benchmark's spark-submit flags, shared with `ablation/probe.sh`) |
 | `conf/spark-rapids.conf` | defaults for interactive `rapids-submit` use |
 | `test_gpu.py` | smoke test that proves a query runs on the GPU |

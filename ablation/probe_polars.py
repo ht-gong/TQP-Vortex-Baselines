@@ -1,6 +1,6 @@
 #!/usr/bin/env python
-"""polars_gpu column probes (see probe_common.py). Same GPUEngine, table scans
-and warm-up as the TPC-H runner (polars/run_tpch_polars.py). The engine's
+"""polars_gpu column probes (see probe_common.py). Same GPUEngine and table scans
+as the TPC-H runner (polars/run_tpch_polars.py), then a warm-up. The engine's
 fallback_mode is "warn", so a probe that cudf-polars cannot run on the GPU
 raises a warning and is recorded as FALLBACK."""
 import os

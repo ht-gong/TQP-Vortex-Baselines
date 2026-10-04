@@ -58,9 +58,16 @@ pin decodes the parquet into cuDF columns in pinned memory, so the parquet forma
 would no longer reach query time (`sirius/README.md`). DuckDB's in-memory
 `tables` mode was removed.
 
-`duckdb_cpu` still differs on protocol: one process runs every query after three
-prewarm passes (which also read the ramdisk), not one process per query.
-`RUNS=1 WARMUPS=0` gives a single cold pass. Details in `duckdb/README.md`.
+**One protocol for every engine: one process per query, an SF1 warm pass, one
+timed run.** In each query's process an untimed warm pass first runs the same
+query on SF1 (`run.sh` stages `$DATA_DIR/sf1` to the ramdisk once per run and
+passes it as `WARM_PARQUET`), so GPU init, kernel JIT and reader setup stay out
+of the timing, as in TQP-Vortex's SF1 warmup. Then the query runs once on the
+target SF's ramdisk copy, timed. No query runs twice on the target data in one
+process; repeating a measurement means a new process. A query that fails its
+warm pass is recorded `FAIL` and not timed. The SF500 rows in `all_results.csv`
+predate this protocol: each engine ran its own warm-up query on the target data
+instead, and duckdb_cpu ran on in-memory tables after three warm runs.
 
 Runners read the same `results/queries/stream_qualification.sql`, take
 `TPCH_PARQUET` / `TPCH_SF`, write a throwaway temp CSV, then fold their 22 rows
@@ -99,7 +106,7 @@ parallel summary CSVs; pivot this instead (`make summary`).
 | `scale_factor` | int | TPC-H scale factor (≈ GB raw) |
 | `query` | string | `query1` … `query22` |
 | `status` | string | `OK` · `FAIL` (engine error; **GPU OOM** shows here with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` (disk-watchdog kill) · `TIMEOUT` (per-query timeout) |
-| `seconds` | float | per-query wall-clock, engine startup excluded; time-to-failure on error; `NA` on a watchdog kill |
+| `seconds` | float | wall-clock of the query's one timed run on the target SF, in its own process after an untimed SF1 warm pass (engine startup excluded); time-to-failure on error; `NA` on a watchdog kill |
 | `rows_or_error` | int / string | result **row count** when `OK`, else a short error string |
 
 ```csv

@@ -2,12 +2,13 @@
 # Run native-Polars TPC-H queries 1-22 on the ramdisk dataset on the GPU
 # (cudf-polars / RAPIDS), one python process per query so each gets a clean GPU
 # context. The streaming executor spills device->host via rapidsmpf (async
-# pool). Per-query time excludes startup (warm-up).
+# pool). Each process first runs its query on the SF1 copy in WARM_PARQUET,
+# untimed, then times it on TPCH_PARQUET (run.sh protocol).
 #
 #   run_polars_gpu.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
 #
-# Env: TPCH_PARQUET (dataset), TPCH_SF, SCRATCH (spill goes to $SCRATCH/polars),
-# POLARS_PY (the image's cudf-polars env).
+# Env: TPCH_PARQUET (dataset), TPCH_SF, WARM_PARQUET (SF1 warm copy), SCRATCH
+# (spill goes to $SCRATCH/polars), POLARS_PY (the image's cudf-polars env).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,6 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERIES="${1:-$(seq 1 22)}"
 DIR="${ROOT}/polars"
 RAM_PQ="${TPCH_PARQUET:?TPCH_PARQUET is not set}"
+: "${WARM_PARQUET:?WARM_PARQUET is not set (the SF1 warm copy)}"
 TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
 # throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)
 OUT_CSV="${OUT_CSV:-/tmp/tpch_polars_gpu_sf${TPCH_SF}.csv}"

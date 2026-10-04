@@ -7,19 +7,18 @@ operators on the GPU (cuDF/RMM/cuCascade) with out-of-core tiered spilling
 (GPU -> pinned host -> disk). We drive its bundled `duckdb` binary, which has
 the extension statically linked and auto-loading, via `-f <file.sql>`.
 
-Mirrors the rapids/polars runners so the three baselines are comparable:
+Mirrors the rapids/polars runners so the baselines are comparable:
   * reads the SAME marker-delimited query stream the rapids run used
     (results/queries/stream_qualification.sql), so the SQL is identical;
-  * per-query wall time excludes engine startup -- a tiny warm-up query absorbs
-    the one-time GPU/cuDF kernel JIT so it is not charged to any query;
   * the dataset is read from the ramdisk parquet (/dev/shm) as DuckDB views;
+  * protocol (as every engine, see AGENTS.md; run_sirius.sh starts one process
+    per query): an untimed warm pass first runs the query on the SF1 dataset in
+    $WARM_PARQUET (GPU init, cuDF kernel JIT, reader setup; its output is
+    discarded), then the views point at the target dataset and the query runs
+    once, timed by the CLI's `.timer on` (engine startup excluded). An error
+    anywhere in the process, the warm pass included, fails the query;
   * results are written incrementally to a CSV so a watchdog kill never loses
-    prior rows.
-
-Per query we run ITERS iterations in one process: iteration 0 is the cold-scan
-time (comparable to the rapids/polars cold parquet scan), later iterations are
-warm (Sirius scan cache). The primary CSV records the cold time in `seconds`;
-a companion *_detail.csv records cold, warm(best) and the GPU/fallback flag.
+    prior rows. A companion *_detail.csv adds the GPU/fallback flag.
 
   run_tpch_sirius.py <parquet_dir> <stream.sql> <out_csv> [SUBSET] [append]
     SUBSET  comma-separated query numbers, e.g. "9" or "1,2,3"  (default 1..22)
@@ -29,7 +28,7 @@ Environment:
   SIRIUS_ENVLIB        its pixi env's lib dir (libcudf, rmm, cudart, ...); put on
                        the binary's LD_LIBRARY_PATH (its RPATH names it as well)
   SIRIUS_CONFIG_FILE   path to the gpu_execution YAML config (required by Sirius)
-  SIRIUS_ITERS         iterations per query (default 2: 1 cold + 1 warm)
+  WARM_PARQUET         the SF1 dataset of the warm pass
   SIRIUS_TIMEOUT       per-query subprocess timeout in seconds (default 1800)
   SIRIUS_LOG_DIR       if set, Sirius writes its spdlog file here; we grep it to
                        tell whether the query actually ran on GPU or fell back.
@@ -50,7 +49,8 @@ SUBSET = [int(x) for x in sys.argv[4].split(",")] if len(sys.argv) > 4 and sys.a
 APPEND = len(sys.argv) > 5 and sys.argv[5] == "append"
 
 DUCKDB = os.environ["SIRIUS_DUCKDB"]
-ITERS = int(os.environ.get("SIRIUS_ITERS", "2"))
+WARM = (os.environ.get("WARM_PARQUET") or sys.exit(
+    "WARM_PARQUET is not set (the SF1 dataset of the warm pass)")).rstrip("/")
 TIMEOUT = int(os.environ.get("SIRIUS_TIMEOUT", "1800"))
 LOG_DIR = os.environ.get("SIRIUS_LOG_DIR", "")
 DETAIL_CSV = os.environ.get("SIRIUS_DETAIL_CSV", os.path.splitext(OUT_CSV)[0] + "_detail.csv")
@@ -58,7 +58,7 @@ DETAIL_CSV = os.environ.get("SIRIUS_DETAIL_CSV", os.path.splitext(OUT_CSV)[0] + 
 TABLES = ["customer", "lineitem", "nation", "orders",
           "part", "partsupp", "region", "supplier"]
 
-ITER_MARK = "__SIRIUS_ITER__"
+RUN_MARK = "__SIRIUS_TIMED_RUN__"
 RUN_TIME_RE = re.compile(r"Run Time \(s\): real ([0-9]+\.[0-9]+)")
 # stderr noise that must not be miscounted as CSV result rows. `mbind: Operation
 # not permitted` is emitted whenever Sirius grows a NUMA-pinned host pool in a
@@ -81,55 +81,52 @@ def parse_stream(path):
     return out
 
 
-def view_sql():
-    """CREATE VIEW over the ramdisk parquet (one sub-dir of part-*.parquet per
-    table, as produced by the NDS-H transcode pipeline)."""
+def view_sql(root):
+    """CREATE OR REPLACE VIEW over the ramdisk parquet under root (one sub-dir of
+    part-*.parquet per table, as produced by the NDS-H transcode pipeline)."""
     lines = []
     for t in TABLES:
-        files = sorted(glob.glob(f"{PARQUET}/{t}/*.parquet")) or [f"{PARQUET}/{t}.parquet"]
+        files = sorted(glob.glob(f"{root}/{t}/*.parquet")) or [f"{root}/{t}.parquet"]
         lst = ", ".join(f"'{f}'" for f in files)
-        lines.append(f"CREATE VIEW {t} AS SELECT * FROM read_parquet([{lst}]);")
+        lines.append(f"CREATE OR REPLACE VIEW {t} AS SELECT * FROM read_parquet([{lst}]);")
     return "\n".join(lines)
 
 
 def build_sql(stmts):
-    per_iter = ";\n".join(stmts) + ";"
-    parts = [view_sql(),
-             # Warm-up: exercise the GPU scan+aggregate path once so the cuDF /
-             # kernel JIT is not charged to any measured query. Excluded (runs
-             # before .timer on and before the first iteration marker).
-             "SELECT n_regionkey, count(*) FROM nation GROUP BY n_regionkey;",
+    query = ";\n".join(stmts) + ";"
+    parts = [view_sql(WARM),
+             # Warm pass: the same query on SF1, untimed (before `.timer on` and
+             # the run marker), its result rows discarded.
+             ".output /dev/null",
+             query,
+             ".output",
+             view_sql(PARQUET),
              ".mode csv",
              ".headers off",
-             ".timer on"]
-    for i in range(ITERS):
-        parts.append(f".print {ITER_MARK}{i}")
-        parts.append(per_iter)
+             ".timer on",
+             f".print {RUN_MARK}",
+             query]
     return "\n".join(parts) + "\n"
 
 
 def parse_output(text):
-    """Split combined stdout+stderr by iteration markers. For each iteration sum
-    its per-statement 'Run Time' values (total wall time) and, for the last
-    iteration, count the CSV result rows (non-timer, non-marker lines)."""
-    iters = []          # list of (secs, rows)
-    cur_secs, cur_rows, in_iter = 0.0, 0, False
+    """The timed run, from the CLI's stdout: everything after the run marker.
+    Returns (seconds, rows): the sum of its statements' 'Run Time' values (total
+    wall time) and its CSV result rows (non-timer lines); None without a marker
+    (the CLI stops at the first error, so a failed warm pass leaves none)."""
+    secs, rows, seen = 0.0, 0, False
     for line in text.splitlines():
-        if line.startswith(ITER_MARK):
-            if in_iter:
-                iters.append((cur_secs, cur_rows))
-            cur_secs, cur_rows, in_iter = 0.0, 0, True
+        if line.startswith(RUN_MARK):
+            seen = True
             continue
-        if not in_iter:
+        if not seen:
             continue
         m = RUN_TIME_RE.search(line)
         if m:
-            cur_secs += float(m.group(1))
+            secs += float(m.group(1))
         elif line.strip() and not NOISE_RE.search(line):
-            cur_rows += 1                     # a CSV result row of this iteration
-    if in_iter:
-        iters.append((cur_secs, cur_rows))
-    return iters
+            rows += 1                     # a CSV result row of the timed run
+    return (secs, rows) if seen else None
 
 
 def newest_log():
@@ -183,8 +180,8 @@ def run_query(num, stmts):
         out = p.stdout + "\n" + p.stderr
     except subprocess.TimeoutExpired as e:
         out = (e.stdout or "") + "\n" + (e.stderr or "") if isinstance(e.stdout, str) else ""
-        return dict(status="TIMEOUT", cold=time.time() - t0, warm=None, rows="killed_timeout", gpu="?")
-    iters = parse_output(out)
+        return dict(status="TIMEOUT", secs=time.time() - t0, rows="killed_timeout", gpu="?")
+    run = parse_output(p.stdout)
     err = None
     for pat in ("Error:", "Invalid Error", "IO Error", "Catalog Error", "Parser Error",
                 "Binder Error", "Out of Memory", "std::bad_alloc", "CUDA", "RMM error"):
@@ -192,20 +189,16 @@ def run_query(num, stmts):
         if m:
             err = m.group(0).strip()[:120].replace(",", ";")
             break
-    if not iters:
-        return dict(status="FAIL", cold=time.time() - t0, warm=None,
-                    rows=(err or "no_output")[:120], gpu="?")
-    cold = iters[0][0]
-    rows = iters[-1][1]
-    warm = min((s for s, _ in iters[1:]), default=None) if len(iters) > 1 else None
+    if run is None:
+        return dict(status="FAIL", secs=time.time() - t0, rows=(err or "no_output")[:120], gpu="?")
+    secs, rows = run
     if err and (p.returncode != 0):
-        return dict(status="FAIL", cold=cold, warm=warm, rows=err, gpu="?")
-    return dict(status="OK", cold=cold, warm=warm, rows=rows, gpu=gpu_or_fallback(log_before))
-
+        return dict(status="FAIL", secs=secs, rows=err, gpu="?")
+    return dict(status="OK", secs=secs, rows=rows, gpu=gpu_or_fallback(log_before))
 
 def main():
     print(f"Sirius run | duckdb={DUCKDB}")
-    print(f"config={os.environ.get('SIRIUS_CONFIG_FILE','<none>')} | iters={ITERS} | timeout={TIMEOUT}s")
+    print(f"config={os.environ.get('SIRIUS_CONFIG_FILE','<none>')} | warm={WARM} | timeout={TIMEOUT}s")
     if not os.path.exists(DUCKDB):
         sys.exit(f"ERROR: duckdb binary not found at {DUCKDB} (build Sirius first)")
     queries = parse_stream(STREAM)
@@ -215,27 +208,23 @@ def main():
     fd = open(DETAIL_CSV, "a" if (APPEND and os.path.exists(DETAIL_CSV)) else "w")
     if write_header:
         f.write("query,status,seconds,result_rows_or_error\n"); f.flush()
-        fd.write("query,status,cold_s,warm_s,rows,gpu\n"); fd.flush()
+        fd.write("query,status,seconds,rows,gpu\n"); fd.flush()
 
-    print(f"\n{'query':10} {'status':8} {'cold_s':>9} {'warm_s':>9} {'rows':>9}  gpu")
+    print(f"\n{'query':10} {'status':8} {'secs':>9} {'rows':>9}  gpu")
     ok = 0
     for n in SUBSET:
         if n not in queries:
             continue
         name = f"query{n}"
         r = run_query(n, queries[n])
-        cold = r["cold"]
-        warm_s = "" if r["warm"] is None else f"{r['warm']:.3f}"
-        warm_disp = "-" if r["warm"] is None else f"{r['warm']:9.2f}"
-        print(f"{name:10} {r['status']:8} {cold:9.2f} {warm_disp:>9} {str(r['rows']):>9}  {r['gpu']}")
-        f.write(f"{name},{r['status']},{cold:.3f},{r['rows']}\n"); f.flush()
-        fd.write(f"{name},{r['status']},{cold:.3f},{warm_s},{r['rows']},{r['gpu']}\n"); fd.flush()
+        print(f"{name:10} {r['status']:8} {r['secs']:9.2f} {str(r['rows']):>9}  {r['gpu']}")
+        f.write(f"{name},{r['status']},{r['secs']:.3f},{r['rows']}\n"); f.flush()
+        fd.write(f"{name},{r['status']},{r['secs']:.3f},{r['rows']},{r['gpu']}\n"); fd.flush()
         if r["status"] == "OK":
             ok += 1
     f.close(); fd.close()
     print(f"\n{ok}/{len([n for n in SUBSET if n in queries])} queries OK | csv -> {OUT_CSV}")
     sys.exit(0 if ok == len([n for n in SUBSET if n in queries]) else 1)
-
 
 if __name__ == "__main__":
     main()

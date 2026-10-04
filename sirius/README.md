@@ -40,7 +40,7 @@ env.sh               engine environment shared by the runner and the format prob
                      config with the IO backend resolved, spill dir
 sirius.yaml          gpu_execution config: 1 GPU, 95% VRAM, 128Gi host tier/NUMA, disk spill
 run_tpch_sirius.py   parses the shared query stream, runs each query through the Sirius
-                     duckdb binary (transparent GPU), times cold+warm, counts result rows
+                     duckdb binary (transparent GPU): SF1 warm pass, one timed run, result rows
 run_sirius.sh        safe per-query driver: one duckdb process per query + disk watchdog
 ```
 
@@ -59,8 +59,9 @@ run_sirius.sh        safe per-query driver: one duckdb process per query + disk 
 make bench SF=100 ENGINES=sirius        # stage -> run 22 queries -> merge into all_results.csv
 ```
 
-Output: rows are upserted into `results/all_results.csv` (`seconds` = cold-scan
-time, startup excluded — see the schema in `README.md` / `AGENTS.md`). Per-query
+Output: rows are upserted into `results/all_results.csv` (`seconds` = the one
+timed run after the SF1 warm pass, startup excluded — see the schema in
+`README.md` / `AGENTS.md`). Per-query
 and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
 
 ### Methodology (matches rapids/polars)
@@ -69,10 +70,12 @@ and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
   the rest, guarded by a **disk watchdog** that kills a query if free `/` drops
   below `MIN_FREE_GB` (Sirius's disk spill tier is also capacity-bounded in
   `sirius.yaml`, a second safety net).
-- Each process creates DuckDB **views** over the parquet, runs a tiny **warm-up**
-  query to absorb one-time GPU/cuDF kernel JIT (excluded), then times the query.
-  Iteration 0 = **cold** (the reported `seconds`, comparable to the rapids/polars
-  cold parquet scan); iteration 1 = **warm** (Sirius scan cache).
+- Each process creates DuckDB **views** over the SF1 ramdisk copy and runs the
+  query there, untimed, with its output discarded (the **SF1 warm pass**: GPU
+  init, cuDF kernel JIT, reader setup), then re-points the views at the target
+  dataset and runs the query **once**, timed — the protocol of every engine
+  (`AGENTS.md`). An error in either run fails the query (the CLI stops at the
+  first error).
 - Single GPU (`topology.num_gpus: 1`) to match `rapids` (`local[*]`, one GPU) and
   `polars` (`device 0`).
 - **No `pin_table`.** Sirius can pin tables in pinned host or GPU memory, but a pin
@@ -85,7 +88,7 @@ and engine logs go to `results/*.log` / `results/*_logs/` (gitignored).
 
 - `sirius.yaml` — `memory.gpu.usage_limit_fraction`, `memory.host.capacity_bytes`
   (pinned, per NUMA node), `memory.disk.downgrade_root_dirs` (spill dir).
-- Env: `SIRIUS_ITERS` (default 2), `SIRIUS_TIMEOUT` (default 2400s), `MIN_FREE_GB`
+- Env: `SIRIUS_TIMEOUT` (default 2400s, covers the warm pass too), `MIN_FREE_GB`
   (default 25), `SIRIUS_CONFIG_FILE`, `SIRIUS_IO`.
 - To *prove* GPU execution (surface fallbacks as errors instead of silent CPU):
   add `SET enable_duckdb_fallback=false;` (the format probes do) — the runner

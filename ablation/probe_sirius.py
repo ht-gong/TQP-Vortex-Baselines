@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 """sirius column probes (see probe_common.py). One Sirius duckdb process runs
-every probe of the list from one SQL script: the runner's views and warm-up
-(sirius/run_tpch_sirius.py), then per column a marker and the probe query,
-timed by the CLI's `.timer on`. DuckDB CPU fallback is disabled for the
-session, so a probe Sirius cannot run on the GPU fails instead of silently
-running on the CPU; such errors are recorded as FALLBACK. `.bail off` keeps the
-process going after a failed probe, as the other engines' workers do.
+every probe of the list from one SQL script: views as the runner's
+(sirius/run_tpch_sirius.py) and a warm-up query, then per column a marker and
+the probe query, timed by the CLI's `.timer on`. DuckDB CPU fallback is
+disabled for the session, so a probe Sirius cannot run on the GPU fails instead
+of silently running on the CPU; such errors are recorded as FALLBACK. `.bail
+off` keeps the process going after a failed probe, as the other engines'
+workers do.
 
 Env: SIRIUS_DUCKDB, SIRIUS_ENVLIB, SIRIUS_CONFIG_FILE (as the runner).
 """

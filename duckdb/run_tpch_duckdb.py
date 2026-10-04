@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Usage: run_tpch_duckdb.py <parquet_dir> <stream.sql> <out_csv> [queries] [runs] [warmups]
+"""Usage: run_tpch_duckdb.py <parquet_dir> <stream.sql> <out_csv> [queries] [append]
 
 DuckDB CPU baseline over the shared TPC-H parquet dataset.
 
@@ -7,8 +7,11 @@ Every table is a view over read_parquet() of the ramdisk copy, and DuckDB's
 external file cache is off, so every query reads and decodes its parquet from
 the ramdisk; nothing is loaded into memory ahead of the timed run.
 
-One measured run per query by default (RUNS=1, WARMUPS=0), engine startup
-excluded. With RUNS>1 the reported seconds is the median of the measured runs.
+Protocol (as every engine, see AGENTS.md; run_duckdb.sh starts one process per
+query): an untimed warm pass first runs the same queries on the SF1 dataset in
+$WARM_PARQUET, then the views point at <parquet_dir> and each query runs once,
+timed (engine startup excluded). A query that fails in the warm pass is
+recorded FAIL and not timed.
 
 Emits the merge_results.py input schema -- `query,status,seconds,
 result_rows_or_error`, one row per query -- so run_duckdb.sh can fold it into
@@ -19,7 +22,6 @@ import os
 import re
 import sys
 import time
-from statistics import median
 
 import duckdb
 
@@ -40,10 +42,11 @@ def parse_stream(path):
 
 
 def create_views(con, parquet):
-    """One view per table over read_parquet() of the parquet dataset."""
+    """One view per table over read_parquet() of the parquet dataset (replacing
+    any earlier view of that name)."""
     base = parquet.rstrip("/")
     for t in TABLES:
-        con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{base}/{t}/*.parquet')")
+        con.execute(f"CREATE OR REPLACE VIEW {t} AS SELECT * FROM read_parquet('{base}/{t}/*.parquet')")
 
 
 def connect():
@@ -84,36 +87,48 @@ def main():
 
     # get args
     parquet, stream, out_csv = sys.argv[1:4]
-    subset = sys.argv[4].replace(",", " ").split() if len(sys.argv) > 4 and sys.argv[4] else range(1, 23)
-    runs = int(sys.argv[5]) if len(sys.argv) > 5 else int(os.environ.get("RUNS", "1"))
-    warmups = int(sys.argv[6]) if len(sys.argv) > 6 else int(os.environ.get("WARMUPS", "0"))
+    subset = [int(q) for q in (sys.argv[4].replace(",", " ").split()
+                               if len(sys.argv) > 4 and sys.argv[4] else range(1, 23))]
+    append = len(sys.argv) > 5 and sys.argv[5] == "append"
+    warm = os.environ.get("WARM_PARQUET") or sys.exit(
+        "WARM_PARQUET is not set (the SF1 dataset of the warm pass)")
     sf = os.environ.get("TPCH_SF", "500")
 
     con, threads = connect()
-
     print(f"duckdb {duckdb.__version__} sf={sf} threads={threads} views over {parquet} "
-          f"runs={runs} warmups={warmups}", flush=True)
+          f"queries={subset}", flush=True)
+    queries = parse_stream(stream)
+
+    # Warm pass: the same queries on SF1, untimed.
+    create_views(con, warm)
+    warm_failed = {}
+    t0 = time.time()
+    for q in subset:
+        tq = time.time()
+        try:
+            run_query(con, queries[q])
+        except Exception as e:
+            warm_failed[q] = (time.time() - tq, str(e).splitlines()[0][:120])
+    print(f"SF1 warm pass done in {time.time() - t0:.1f}s (excluded from query timings)", flush=True)
     create_views(con, parquet)
 
-    queries = parse_stream(stream)
-    with open(out_csv, "w", newline="") as f:
+    write_header = not (append and os.path.exists(out_csv))
+    with open(out_csv, "a" if append else "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["query", "status", "seconds", "result_rows_or_error"])
+        if write_header:
+            w.writerow(["query", "status", "seconds", "result_rows_or_error"])
 
         for q in subset:
-            q = int(q)
+            if q in warm_failed:
+                dt, msg = warm_failed[q]
+                w.writerow([f"query{q}", "FAIL", f"{dt:.3f}", f"SF1 warm pass: {msg}"])
+                print(f"query{q:<3d} FAIL SF1 warm pass: {msg}", flush=True)
+                f.flush()
+                continue
             try:
-                # optional warmups, then the measured run(s)
-                for _ in range(warmups):
-                    run_query(con, queries[q])
-
-                times, rows = [], 0
-                for _ in range(runs):
-                    t0 = time.time()
-                    rows = run_query(con, queries[q])
-                    times.append(time.time() - t0)
-
-                dt = median(times)
+                t0 = time.time()
+                rows = run_query(con, queries[q])
+                dt = time.time() - t0
                 w.writerow([f"query{q}", "OK", f"{dt:.3f}", rows])
                 print(f"query{q:<3d} OK   {dt:8.3f}s rows={rows}", flush=True)
             except Exception as e:
@@ -121,7 +136,6 @@ def main():
                 w.writerow([f"query{q}", "FAIL", "NA", msg])
                 print(f"query{q:<3d} FAIL {msg}", flush=True)
             f.flush()
-
 
 if __name__ == "__main__":
     main()

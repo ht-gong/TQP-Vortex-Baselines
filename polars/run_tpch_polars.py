@@ -2,9 +2,11 @@
 """Run native-Polars TPC-H queries 1-22 on the GPU (cudf-polars) over a parquet
 dataset (normally the ramdisk copy).
 
-Mirrors the RAPIDS run: per-query wall time excludes engine startup (a warm-up
-query absorbs GPU init / first-touch cost), and results are written
-incrementally to a CSV so a watchdog kill never loses prior rows.
+Protocol (as every engine, see AGENTS.md): an untimed warm pass first runs the
+same queries on the SF1 dataset in $WARM_PARQUET (GPU init, JIT, reader setup);
+then each query runs once on <input_dir>, timed. A query that fails in the warm
+pass is recorded FAIL and not timed. Results are written incrementally to a CSV
+so a watchdog kill never loses prior rows.
 
   run_tpch_polars.py <input_dir> <out_csv> [SUBSET] [append]
     SUBSET  comma-separated query numbers, e.g. "9" or "1,2,3"  (default: 1..22)
@@ -65,14 +67,25 @@ def main():
     SUBSET = [int(x) for x in sys.argv[3].split(",")] if len(sys.argv) > 3 and sys.argv[3] else list(range(1, 23))
     APPEND = len(sys.argv) > 4 and sys.argv[4] == "append"
 
+    warm_dir = os.environ.get("WARM_PARQUET") or sys.exit(
+        "WARM_PARQUET is not set (the SF1 dataset of the warm pass)")
+
     print(f"Polars {pl.__version__} | engine=gpu | threads={pl.thread_pool_size()}")
     engine = build_engine()
-    lf = {t: scan(INPUT, t) for t in TABLES}
 
-    # Warm-up: touch lineitem so first-read/JIT is not charged to any query.
+    # Warm pass: the same queries on SF1, untimed.
+    warm = {t: scan(warm_dir, t) for t in TABLES}
+    warm_failed = {}
     t0 = time.time()
-    lf["lineitem"].select(pl.len()).collect(engine=engine)
-    print(f"warm-up done in {time.time()-t0:.1f}s (excluded from query timings)")
+    for n in SUBSET:
+        tq = time.time()
+        try:
+            QUERIES[n](warm).collect(engine=engine)
+        except Exception as e:
+            warm_failed[n] = (time.time() - tq, str(e).splitlines()[0][:90].replace(",", ";"))
+    print(f"SF1 warm pass done in {time.time()-t0:.1f}s (excluded from query timings)")
+
+    lf = {t: scan(INPUT, t) for t in TABLES}
 
     write_header = not (APPEND and os.path.exists(OUT_CSV))
     f = open(OUT_CSV, "a" if APPEND else "w")
@@ -84,6 +97,13 @@ def main():
     ok = 0
     for n in SUBSET:
         name = f"query{n}"
+        if n in warm_failed:
+            dt, msg = warm_failed[n]
+            msg = f"SF1 warm pass: {msg}"[:90]
+            print(f"{name:10} {'FAIL':8} {dt:9.2f}   {msg}")
+            f.write(f"{name},FAIL,{dt:.3f},{msg}\n")
+            f.flush()
+            continue
         t0 = time.time()
         try:
             res = QUERIES[n](lf).collect(engine=engine)

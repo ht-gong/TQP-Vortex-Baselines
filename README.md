@@ -54,8 +54,9 @@ then frees the ramdisk. Each engine folds its 22 rows into
 | `sirius` | Sirius (GPU-native SQL, DuckDB 1.5.5 extension, libcudf 26.08) | `sirius/` |
 
 Every engine reads the ramdisk parquet in every query; none loads tables into
-memory first. `duckdb_cpu` runs all queries in one process after prewarm passes,
-where the GPU engines start one process per query (`duckdb/README.md`).
+memory first. Every engine runs each query in its own process: an untimed warm
+pass of the same query on SF1, then one timed run on the target scale factor
+(`AGENTS.md`).
 
 ## Data — one generator for every engine
 
@@ -85,7 +86,7 @@ every other view (summary, matrices, per-engine scaling) is a pivot of this file
 | `scale_factor` | int | TPC-H scale factor (≈ GB of raw data) |
 | `query` | string | `query1` … `query22` |
 | `status` | string | `OK` · `FAIL` (engine error; GPU out-of-memory shows here with an "OOM retry limit" message in `rows_or_error`) · `KILLED_DISK` (disk-watchdog kill) · `TIMEOUT` (per-query timeout) |
-| `seconds` | float | per-query wall-clock, engine startup excluded; time-to-failure on error; `NA` on a watchdog kill |
+| `seconds` | float | wall-clock of the query's one timed run on the target scale factor, in its own process after an untimed SF1 warm pass (engine startup excluded); time-to-failure on error; `NA` on a watchdog kill |
 | `rows_or_error` | int / string | result **row count** when `OK`, else a short error message |
 
 Result row counts must **match across engines at the same scale factor** — a

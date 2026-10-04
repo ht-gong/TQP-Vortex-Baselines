@@ -3,12 +3,15 @@
 #   * one spark-submit per query  -> scratch is reclaimed when each JVM exits,
 #     so a heavy query can't poison the rest;
 #   * a disk watchdog kills a query (and moves on) if free disk drops below a
-#     threshold -> the box can never wedge on a full disk again.
+#     threshold -> the box can never wedge on a full disk again;
+#   * each process first runs its query on the SF1 copy in WARM_PARQUET,
+#     untimed (GPU init, JIT), then times it on TPCH_PARQUET (run.sh protocol).
 #
 #   run_tpch_safe.sh [QUERY_LIST]      e.g. "1 2 3"  (default: 1..22)
 #
-# Env: TPCH_PARQUET (dataset), TPCH_SF, SCRATCH (Spark local dirs go to
-# $SCRATCH/rapids), plus the image's PY / JAVA_HOME / SPARK_HOME / RAPIDS_JAR.
+# Env: TPCH_PARQUET (dataset), TPCH_SF, WARM_PARQUET (SF1 warm copy), SCRATCH
+# (Spark local dirs go to $SCRATCH/rapids), plus the image's PY / JAVA_HOME /
+# SPARK_HOME / RAPIDS_JAR.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +19,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERIES="${1:-$(seq 1 22)}"
 RAPIDS_DIR="${ROOT}/rapids"
 RAM_PQ="${TPCH_PARQUET:?TPCH_PARQUET is not set}"
+: "${WARM_PARQUET:?WARM_PARQUET is not set (the SF1 warm copy)}"
 STREAM="${ROOT}/results/queries/stream_qualification.sql"
 TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
 # throwaway temp; folded into results/all_results.csv at the end (no per-run CSV kept)

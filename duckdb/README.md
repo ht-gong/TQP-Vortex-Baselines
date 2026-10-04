@@ -23,23 +23,17 @@ deletes its temp CSV — no per-run/per-SF CSVs, same as the other engines.
 
 ## Measurement protocol
 
-Mirrors the local `test.py` flow this baseline came from.
-
 - **Data:** every table is a view over `read_parquet()` of the ramdisk copy, and
   DuckDB's external file cache is off, so every run reads and decodes its parquet
   from the ramdisk, like the GPU engines. Nothing is loaded into memory ahead of
   a query (no in-memory tables; that mode was removed).
-- **Timing** (default `WARMUPS=3 RUNS=1`): three prewarm passes over the query
-  set, then one measured run each, all in one process — the `test.py` protocol.
-  `RUNS>1` reports the median of the measured runs.
+- **Timing:** the protocol of every engine (`AGENTS.md`). `run_duckdb.sh` starts
+  one process per query; it first runs the query on the SF1 ramdisk copy
+  (`WARM_PARQUET`), untimed, then once on the target dataset, timed.
 
-⚠️ **The process is warm.** The GPU engines start one process per query;
-`duckdb_cpu` runs every query in one process after three prewarm passes (which
-read the ramdisk too; no data stays cached). `RUNS=1 WARMUPS=0` gives a single
-cold pass.
-
-Rows in `all_results.csv` from before this change were measured on in-memory
-tables (`tables` mode) and are not comparable to new runs.
+Rows in `all_results.csv` from before these changes were measured on in-memory
+tables (`tables` mode) after three warm runs in one process, and are not
+comparable to new runs.
 
 Other env knobs: `DUCKDB_THREADS` (defaults to the process CPU affinity, not the
 whole box), `DUCKDB_MEMORY_LIMIT`, `DUCKDB_TEMP_DIR` (spill location), `STREAM`.

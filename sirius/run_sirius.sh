@@ -7,13 +7,14 @@
 # rapids/run_tpch_safe.sh.
 #
 # One GPU; Sirius spills GPU -> pinned host RAM -> disk per sirius.yaml.
-# Per-query time excludes engine startup (a warm-up query absorbs GPU/JIT init);
+# Each process first runs its query on the SF1 copy in WARM_PARQUET, untimed
+# (GPU init, JIT), then times it once on SIRIUS_PARQUET (run.sh protocol);
 # results are appended incrementally.
 #
 #   run_sirius.sh [QUERY_LIST]   e.g. "1 2 3"   (default: 1..22)
 #
-# Env: SIRIUS_PARQUET (dataset), TPCH_SF, PY, and the image's SIRIUS_DUCKDB /
-# SIRIUS_ENVLIB (sirius/env.sh).
+# Env: SIRIUS_PARQUET (dataset), TPCH_SF, WARM_PARQUET (SF1 warm copy), PY, and
+# the image's SIRIUS_DUCKDB / SIRIUS_ENVLIB (sirius/env.sh).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +22,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QUERIES="${1:-$(seq 1 22)}"
 DIR="${ROOT}/sirius"
 RAM_PQ="${SIRIUS_PARQUET:?SIRIUS_PARQUET is not set}"
+: "${WARM_PARQUET:?WARM_PARQUET is not set (the SF1 warm copy)}"
 STREAM="${ROOT}/results/queries/stream_qualification.sql"
 LOGDIR="${ROOT}/results"
 TPCH_SF="${TPCH_SF:?TPCH_SF is not set}"
@@ -36,7 +38,6 @@ MIN_FREE_GB="${MIN_FREE_GB:-25}"
 # shellcheck disable=SC1091
 source "${DIR}/env.sh"
 SPILL="${SIRIUS_SPILL}"
-export SIRIUS_ITERS="${SIRIUS_ITERS:-2}"
 export SIRIUS_TIMEOUT="${SIRIUS_TIMEOUT:-2400}"
 export SIRIUS_DETAIL_CSV="${DETAIL_CSV}"
 export SIRIUS_LOG_DIR="${SIRIUS_LOG_DIR:-${LOGDIR}/${TAG}_logs}"
@@ -49,7 +50,7 @@ if [ ! -x "${SIRIUS_DUCKDB}" ]; then
   log "ERROR: no Sirius duckdb binary at ${SIRIUS_DUCKDB}"; exit 1
 fi
 
-log "Sirius per-query run. queries=[${QUERIES}] iters=${SIRIUS_ITERS} timeout=${SIRIUS_TIMEOUT}s min_free=${MIN_FREE_GB}GB"
+log "Sirius per-query run. queries=[${QUERIES}] warm=${WARM_PARQUET} timeout=${SIRIUS_TIMEOUT}s min_free=${MIN_FREE_GB}GB"
 log "duckdb=${SIRIUS_DUCKDB}"
 log "config=${SIRIUS_CONFIG_FILE} ; io=${SIRIUS_IO} ; parquet=${RAM_PQ}"
 log "free disk at start: $(free_gb)GB ; ramdisk: $(du -sh ${RAM_PQ%/parquet} 2>/dev/null | cut -f1)"
